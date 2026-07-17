@@ -1,0 +1,57 @@
+---
+title: "The Roofline & the Four-Way Bound"
+part: 0
+chapter: 1
+last_verified: 2026-07-17
+freshness: theoretical
+volatility: stable-principle
+tags: [roofline, arithmetic-intensity, foundations]
+description: "The one mental model the guide reuses: compute- vs memory- vs comms- vs overhead-bound, via arithmetic intensity."
+sources:
+  - { tier: "T1", url: "https://en.wikipedia.org/wiki/Roofline_model", label: "Williams, Waterman & Patterson — Roofline (CACM 2009)" }
+  - { tier: "T2", url: "https://jax-ml.github.io/scaling-book/", label: "How to Scale Your Model (Google / JAX-ML)" }
+  - { tier: "T3", url: "https://horace.io/brrr_intro.html", label: "Horace He — Making Deep Learning Go Brrr" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Roofline & the Four-Way Bound
+
+**Where we are.** Every performance question in this guide reduces to one picture: is this work
+limited by arithmetic, by memory bandwidth, by communication, or by launch/overhead? The roofline
+fixes the vocabulary the rest of the book reuses.
+
+<Invariant note="cost model (timeless)">
+A device finishes an operation no faster than the slower of two clocks — the rate it does
+arithmetic and the rate it streams operands from memory. For work doing $\Phi$ FLOPs while moving
+$\beta$ bytes on a device with peak rate $F$ and bandwidth $\mathcal B$:
+$$T \ge \max\!\left(\tfrac{\Phi}{F},\ \tfrac{\beta}{\mathcal B}\right).$$
+The two are equal at the **arithmetic intensity** $I=\Phi/\beta=F/\mathcal B=I^\*$ — the device's
+**ridge point**. Below it a workload is *memory-bound*; above it *compute-bound*. Add a comms roof
+(for multi-device) and an overhead floor (Python/launch latency) and you have the **four-way bound**.
+</Invariant>
+
+The invariant above never expires. The *numbers* that instantiate it do — so they carry provenance:
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+Our reference model **R1-tiny** (6,327,552 params) trains at ~**82,000 tok/s** at batch 8 on the
+RTX 2070 SUPER; its decode step has arithmetic intensity ≈ 1 (one weight read per token) and is
+firmly **memory-bound** — the reason inference optimization later targets bytes moved, not FLOPs.
+</Renewable>
+
+Reproduce the measurement yourself — this listing is versioned because the toolchain moves:
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0 · triton==3.7.1">
+```bash
+uv pip install torch==2.13.0 triton==3.7.1 numpy pyyaml
+python m1a_real.py   # trains R1-tiny on the R0 tokens; emits a validated benchmark report
+```
+</Versioned>
+
+<SourceList sources={[
+  { tier: "T1", url: "https://en.wikipedia.org/wiki/Roofline_model", label: "Williams–Waterman–Patterson, Roofline (CACM 2009)" },
+  { tier: "T2", url: "https://jax-ml.github.io/scaling-book/", label: "How to Scale Your Model (Google/JAX-ML)" },
+  { tier: "T3", url: "https://horace.io/brrr_intro.html", label: "Horace He — Making Deep Learning Go Brrr" },
+]} />

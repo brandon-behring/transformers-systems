@@ -12,7 +12,9 @@ import { defineBookConfig, researchPortfolioStyle } from '@brandon_m_behring/boo
 
 export default await defineBookConfig({
   styles: [researchPortfolioStyle],
-  site: 'https://example.invalid',
+  site: 'https://guides.brandon-behring.dev',
+  // Deploy under the family hub at /transformers-systems/ (slug-aligned with the repo).
+  base: '/transformers-systems/',
   // This scaffold owns src/pages/index.astro, so disable the package landing
   // route explicitly. Astro plans to make duplicate static routes a hard error.
   routes: { landing: false },
