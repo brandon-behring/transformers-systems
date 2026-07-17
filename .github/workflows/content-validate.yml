@@ -1,0 +1,24 @@
+name: content-validate
+# CPU-PR lane (the only hosted lane — there is no GPU CI runner; the 1-GPU parity and
+# multi-GPU qualification lanes run locally on Tier-0 and emit retained benchmark artifacts).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cpu-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Build (validate + Astro + pagefind)
+        run: npm run build
+      - name: Governance gates
+        run: |
+          node scripts/freshness-expiry.mjs   # I/R/V blocks within TTL
+          node scripts/version-matrix.mjs      # Versioned pins in supported matrix
+          node scripts/concept-registry.mjs    # concept-ID uniqueness + no dangling refs
