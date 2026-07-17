@@ -1,0 +1,22 @@
+---
+import Base from '@brandon_m_behring/book-scaffold-astro/layouts/Base.astro';
+import { normalizeBase } from '@brandon_m_behring/book-scaffold-astro';
+
+const baseUrl = normalizeBase(import.meta.env.BASE_URL);
+---
+<Base title="transformer-systems" description="A book scaffolded with @brandon_m_behring/create-book (research-portfolio profile).">
+  <article class="prose">
+    <h1>transformer-systems</h1>
+    <p>
+      This is the landing page for your book. Edit it at
+      <code>src/pages/index.astro</code>.
+    </p>
+    <p>
+      Chapters live under <code>src/content/chapters/</code>. The auto-injected
+      routes are <a href={baseUrl + 'chapters/'}>/chapters</a>,
+      <a href={baseUrl + 'references/'}>/references</a>,
+      <a href={baseUrl + 'search/'}>/search</a>, and
+      <a href={baseUrl + 'print/'}>/print</a>.
+    </p>
+  </article>
+</Base>

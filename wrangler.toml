@@ -1,0 +1,7 @@
+# wrangler.toml — Cloudflare Pages deploy.
+# Run: npx wrangler pages deploy ./dist --project-name=transformers-systems
+# Set up: https://developers.cloudflare.com/pages/
+
+name = "transformers-systems"
+compatibility_date = "2025-12-01"
+pages_build_output_dir = "./dist"

@@ -1,0 +1,43 @@
+{
+  "name": "transformers-systems",
+  "description": "A book scaffolded with @brandon_m_behring/create-book (research-portfolio profile).",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "author": "Brandon Behring",
+  "license": "MIT",
+  "scripts": {
+    "predev": "npm run build:bib --if-present && npm run build:labels --if-present",
+    "prevalidate": "npm run build:bib --if-present && npm run build:labels --if-present",
+    "prebuild": "npm run validate --if-present",
+    "build:bib": "book-scaffold build-bib",
+    "build:labels": "book-scaffold build-labels",
+    "build:figures": "book-scaffold build-figures",
+    "build:notebooks": "book-scaffold render-notebooks",
+    "validate": "book-scaffold validate",
+    "qa": "book-scaffold qa",
+    "dev": "astro dev",
+    "build": "astro build && pagefind --site dist",
+    "preview": "astro preview",
+    "prepdf": "npm run build",
+    "pdf:render": "mkdir -p dist-pdf && pagedjs-cli http://localhost:4321/print/ -o dist-pdf/book.pdf",
+    "pdf": "start-server-and-test preview http://localhost:4321/ pdf:render"
+  },
+  "dependencies": {
+    "@brandon_m_behring/book-scaffold-astro": "^5.2.0",
+    "@astrojs/mdx": "^5.0.3",
+    "@astrojs/preact": "^5.1.1",
+    "astro": "^6.1.7",
+    "preact": "^10.29.1",
+    "katex": "^0.16.11",
+    "rehype-katex": "^7.0.1",
+    "remark-math": "^6.0.0"
+  },
+  "devDependencies": {
+    "pagedjs-cli": "^0.4.3",
+    "start-server-and-test": "^3.0.11"
+  },
+  "allowScripts": {
+    "puppeteer@20.9.0": true
+  }
+}
