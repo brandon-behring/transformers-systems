@@ -23,7 +23,8 @@
     "pdf:render": "mkdir -p dist-pdf && pagedjs-cli http://localhost:4321/print/ -o dist-pdf/book.pdf",
     "pdf": "start-server-and-test preview http://localhost:4321/ pdf:render",
     "check:freshness": "node scripts/freshness-expiry.mjs",
-    "check:versions": "node scripts/version-matrix.mjs"
+    "check:versions": "node scripts/version-matrix.mjs",
+    "check:concepts": "node scripts/concept-registry.mjs"
   },
   "dependencies": {
     "@brandon_m_behring/book-scaffold-astro": "^5.2.0",

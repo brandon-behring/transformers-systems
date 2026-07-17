@@ -1,0 +1,9 @@
+{
+  "registry": {
+    "roofline": "src/content/chapters/00-roofline.mdx",
+    "arithmetic-intensity": "src/content/chapters/00-roofline.mdx",
+    "four-way-bound": "src/content/chapters/00-roofline.mdx",
+    "ridge-point": "src/content/chapters/00-roofline.mdx"
+  },
+  "crossGuide": []
+}
