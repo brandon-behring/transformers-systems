@@ -1,0 +1,15 @@
+---
+/**
+ * Invariant block (I/R/V provenance model).
+ * Wraps timeless content — cost models, correctness contracts, dependency graphs, proofs.
+ * No expiry (the freshness gate ignores it); the tag just makes the provenance class visible.
+ */
+interface Props {
+  note?: string;
+}
+const { note } = Astro.props;
+---
+<aside class="rv-block rv-invariant" data-rv="invariant">
+  <p class="rv-tag">Invariant{note ? ` · ${note}` : ""}</p>
+  <slot />
+</aside>

@@ -1,0 +1,21 @@
+---
+/**
+ * Renewable-evidence block (I/R/V provenance model).
+ * Wraps measured constants / hardware behaviour that decays — carries a `last_measured`
+ * date the freshness-expiry CI gate checks against a TTL (default 365d). `measured_on`
+ * records the Tier-0/Tier-1 provenance (reference-model.md §7).
+ */
+interface Props {
+  last_measured: string; // YYYY-MM-DD
+  measured_on?: string; // e.g. "Tier-0 RTX 2070 SUPER"
+  source?: string;
+}
+const { last_measured, measured_on, source } = Astro.props;
+---
+<aside class="rv-block rv-renewable" data-rv="renewable" data-last-measured={last_measured} data-measured-on={measured_on}>
+  <p class="rv-tag">
+    Renewable evidence · measured {last_measured}{measured_on ? ` · ${measured_on}` : ""}
+    {source ? <> · <a href={source}>source</a></> : null}
+  </p>
+  <slot />
+</aside>

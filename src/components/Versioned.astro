@@ -1,0 +1,21 @@
+---
+/**
+ * Versioned-implementation block (I/R/V provenance model).
+ * Wraps framework-specific content (commands, APIs, kernel listings) that ages fastest —
+ * carries `as_of` + `version`; the freshness-expiry gate checks `as_of` against a short TTL
+ * (default 90d) so stale API/command listings fail CI.
+ */
+interface Props {
+  as_of: string; // YYYY-MM-DD
+  version: string; // e.g. "torch==2.13.0"
+  source?: string;
+}
+const { as_of, version, source } = Astro.props;
+---
+<aside class="rv-block rv-versioned" data-rv="versioned" data-as-of={as_of} data-version={version}>
+  <p class="rv-tag">
+    Versioned · {version} · as of {as_of}
+    {source ? <> · <a href={source}>source</a></> : null}
+  </p>
+  <slot />
+</aside>
