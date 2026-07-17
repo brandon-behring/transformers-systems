@@ -1,0 +1,7 @@
+{
+  "_comment": "The toolchain versions the guide's Versioned blocks + labs are tested against. The version-matrix gate flags any <Versioned version=\"pkg==X\"> not listed here, so a bumped listing without a re-test trips CI. Distinct axis from freshness (age) and I/R/V (provenance).",
+  "torch": ["2.13.0"],
+  "triton": ["3.7.1"],
+  "book-scaffold-astro": ["5.2.0"],
+  "astro": ["6.1.7"]
+}
