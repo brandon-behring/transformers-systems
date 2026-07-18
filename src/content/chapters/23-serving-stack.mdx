@@ -1,0 +1,85 @@
+---
+title: "The Minimal Serving Stack"
+part: 5
+chapter: 24
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [serving, scheduler, continuous-batching, inference, r1]
+concept_ids: [serving-stack, continuous-batching, scheduler, serving-parity]
+description: "Assembling prefill, decode, and the paged cache into a server: a scheduler that batches requests continuously, the memory bookkeeping that admits them, and the parity invariant that keeps the served output identical to the reference."
+scenario_ids: [r1-tiny-train]
+code_path: "serve/paged_kv.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2309.06180", label: "Kwon et al. — PagedAttention / vLLM (2023)" }
+  - { tier: "T1", url: "https://www.usenix.org/conference/osdi22/presentation/yu", label: "Yu et al. — Orca: continuous (iteration-level) batching (OSDI 2022)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Minimal Serving Stack
+
+**Where we are.** We have the pieces — [KV-cache](/transformers-systems/chapters/20-kv-cache/),
+[prefill/decode](/transformers-systems/chapters/21-prefill-decode/), and a
+[paged cache](/transformers-systems/chapters/22-paged-kv/). This chapter assembles them into a server and
+names the one component that turns pieces into throughput: the scheduler. It closes Part 5 by tying serving
+back to the numbers contract — the served output must equal the reference.
+
+## 1. Continuous batching is the throughput lever
+
+<Invariant note="iteration-level scheduling">
+A static batch — collect $N$ requests, run them to completion together — wastes the device: short requests
+finish and their slots idle until the longest finishes. **Continuous (iteration-level) batching** instead
+schedules *per step*: at every decode iteration the server admits newly arrived requests and evicts
+finished ones, keeping the batch full. Because decode is memory-bound, adding sequences to a decode batch is
+nearly free in latency and raises arithmetic intensity toward compute-bound — so continuous batching is the
+single change that most improves decode throughput.
+</Invariant>
+
+The scheduler is where prefill and decode are interleaved: it decides, each iteration, which requests are in
+their prefill phase and which are decoding, and — with chunked prefill — how to keep a long prefill from
+starving ongoing decode.
+
+## 2. Admission is a memory-accounting problem
+
+<Invariant note="the scheduler is bounded by the block pool">
+A request can be admitted only if the paged cache has enough free blocks for its prompt plus expected
+generation; the scheduler is therefore a memory allocator wearing a queue. When the block pool is exhausted
+it must apply a policy — queue new requests, or preempt and evict a running sequence's blocks (recomputing or
+swapping them later). The paged cache from the previous chapter is what makes this bookkeeping tractable:
+admission reduces to "are there enough free blocks," a pool query, not a contiguity search.
+</Invariant>
+
+This is why paging and scheduling are one system: the block pool is the currency the scheduler spends, and
+its non-fragmenting allocation is what lets the scheduler pack the device.
+
+## 3. Served output must match the reference
+
+<Invariant note="serving inherits the numbers contract">
+Every optimization in the serving stack — caching, paging, batching, chunking — is a performance change that
+must be *output-preserving*. The stack's correctness invariant is that greedy generation through the full
+server equals greedy generation from the reference implementation, token for token. Throughput claims are
+only meaningful against this parity: a faster server that changes the output is not a faster server, it is a
+different model. Serving is where the numbers contract earns its keep, because it is where the temptation to
+trade correctness for speed is strongest.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The pilot's minimal server composes prefill, paged decode, and per-token generation for R1-tiny, and its
+acceptance gate is parity: the served greedy tokens are **bit-identical** to a full-recompute reference. It
+reports the prefill/decode timing split rather than a blended tokens/sec, so the compute-bound and
+memory-bound costs stay legible. Continuous batching and preemption are designed-for; the pilot pins the
+single-stream correctness they must preserve.
+</Renewable>
+
+**Where this goes.** Part 5 completes the training-to-serving spine for the text model R1: it decides,
+builds, scales, and serves. Part 6 turns from capability to *behavior* — aligning the model with SFT,
+parameter-efficient tuning, and preference optimization, all scored as CI.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2309.06180", label: "Kwon et al., vLLM — paging plus continuous batching in one serving system" },
+  { tier: "T1", url: "https://www.usenix.org/conference/osdi22/presentation/yu", label: "Yu et al., Orca — iteration-level (continuous) batching" },
+]} />

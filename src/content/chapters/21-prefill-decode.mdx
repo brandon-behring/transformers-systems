@@ -1,0 +1,83 @@
+---
+title: "Prefill vs Decode: Two Regimes, Two Rooflines"
+part: 5
+chapter: 22
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [inference, prefill, decode, roofline, latency]
+concept_ids: [prefill-regime, decode-regime, ttft-tpot, compute-vs-memory-bound]
+description: "The two phases of inference sit on opposite sides of the ridge point: prefill is a compute-bound batched pass, decode is a memory-bound one-token-at-a-time stream — and they are measured by different clocks."
+scenario_ids: [r1-tiny-train]
+code_path: "serve/paged_kv.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2211.05102", label: "Pope et al. — Efficiently Scaling Transformer Inference (2022)" }
+  - { tier: "T3", url: "https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices", label: "Databricks — LLM Inference Performance (TTFT/TPOT/MBU)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2308.16369", label: "Agrawal et al. — SARATHI: chunked prefills (2023)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Prefill vs Decode: Two Regimes, Two Rooflines
+
+**Where we are.** The [KV-cache](/transformers-systems/chapters/20-kv-cache/) split generation into filling
+the cache and extending it. This chapter shows those two operations are not just sequential phases but
+*different workloads* — one compute-bound, one memory-bound — measured by different clocks. Confusing them
+is the most common inference-performance mistake.
+
+## 1. Prefill: a compute-bound batched pass
+
+<Invariant note="prefill">
+**Prefill** processes the entire prompt in one forward pass, computing keys and values for all prompt
+tokens at once and filling the cache. Because it operates on many tokens simultaneously, its matrix
+multiplications are large and its arithmetic intensity is high: prefill is **compute-bound**, sitting above
+the roofline's ridge point. Its latency sets the **time-to-first-token (TTFT)** — how long the user waits
+before generation begins.
+</Invariant>
+
+## 2. Decode: a memory-bound token stream
+
+<Invariant note="decode">
+**Decode** extends the sequence one token at a time. Each step multiplies a *single* token's activation by
+the full weight matrices and reads the entire KV-cache — a lot of bytes moved for one token of compute, so
+arithmetic intensity is near $1$ and decode is firmly **memory-bound**, below the ridge point. Its per-token
+latency is the **time-per-output-token (TPOT)**, and the relevant utilization is model-bandwidth
+utilization (MBU), not model-FLOPs utilization.
+</Invariant>
+
+The two phases live on opposite sides of the ridge point, so they respond to opposite optimizations:
+prefill wants more FLOP/s (larger tiles, better kernels), decode wants more bandwidth and fewer bytes
+(a smaller cache, quantization, GQA). An optimization that helps one can be irrelevant to the other.
+
+## 3. Why the distinction is operational
+
+<Invariant note="serve the two phases by their nature">
+Because prefill is compute-bound and decode is memory-bound, a server should treat them differently:
+batching many *decode* steps together raises the otherwise-wasted arithmetic intensity toward compute-bound
+(the motivation for continuous batching), while a long *prefill* can monopolize the device and stall other
+requests' decode — which is why chunked prefill interleaves prefill work with ongoing decode. Reporting a
+single "tokens/sec" that mixes the two hides which one is the bottleneck; TTFT and TPOT must be reported
+separately.
+</Invariant>
+
+This is Part 0's methodology again: quote the metric appropriate to the regime. A TPOT quoted as if it were
+throughput, or an MFU quoted for a memory-bound decode, misdescribes the system.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The lab's serving path times prefill and decode **separately**, exposing the split directly: prefill is a
+single batched pass over the prompt (compute-heavy), while decode is a loop of one-token steps whose
+per-token cost is dominated by streaming weights and the growing KV-cache — the memory-bound regime the
+roofline predicts.
+</Renewable>
+
+**Where this goes.** Serving many requests at once means managing many growing KV-caches without wasting
+memory. The next chapter borrows an idea from operating systems — paging — to do exactly that.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2211.05102", label: "Pope et al. — prefill/decode analysis and inference cost model" },
+  { tier: "T3", url: "https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices", label: "Databricks — TTFT, TPOT, and MBU as the decode-regime metrics" },
+  { tier: "T1", url: "https://arxiv.org/abs/2308.16369", label: "Agrawal et al., SARATHI — chunked prefill to protect decode latency" },
+]} />

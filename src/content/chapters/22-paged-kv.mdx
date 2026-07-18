@@ -1,0 +1,90 @@
+---
+title: "Paged KV-Cache: A Block Pool and a Block Table"
+part: 5
+chapter: 23
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [inference, paged-attention, kv-cache, memory, serving]
+concept_ids: [paged-attention, physical-blocks, block-table, memory-fragmentation]
+description: "The KV-cache memory problem is fragmentation, and the fix is virtual memory: fixed-size physical blocks, a per-sequence block table mapping logical positions to non-contiguous blocks, and an exactness invariant that paging changes storage, not output."
+scenario_ids: [r1-tiny-train]
+code_path: "serve/paged_kv.py"
+tests_path: "tests/test_r1_tiny_fixture.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2309.06180", label: "Kwon et al. — Efficient Memory Management for LLM Serving with PagedAttention (vLLM, 2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2211.05102", label: "Pope et al. — Efficiently Scaling Transformer Inference (2022)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Paged KV-Cache: A Block Pool and a Block Table
+
+**Where we are.** Serving many requests means many KV-caches, each growing unpredictably. The
+[prefill/decode](/transformers-systems/chapters/21-prefill-decode/) split showed the cache is the decode
+bottleneck; this chapter shows how to *manage* it without wasting most of it — by borrowing virtual memory
+from operating systems.
+
+## 1. The problem is fragmentation
+
+<Invariant note="why a contiguous cache wastes memory">
+A KV-cache allocated as one contiguous buffer per sequence must be sized for the *maximum* possible length,
+because it cannot grow into another sequence's space. A request that ends early leaves its reservation
+unused (internal fragmentation), and the fixed reservations leave gaps too small for a new sequence
+(external fragmentation). At high concurrency this waste dominates, so the device serves far fewer
+sequences than its memory could hold.
+</Invariant>
+
+The waste is not the cache's *content* but its *layout*: contiguity forces over-reservation.
+
+## 2. Paging: physical blocks and a block table
+
+<Invariant note="PagedAttention">
+Paged attention splits the KV-cache into fixed-size **physical blocks** drawn from a shared pool, and gives
+each sequence a **block table** mapping its logical token positions to physical blocks that need not be
+contiguous. A sequence grows by claiming one more block from the pool when its current block fills; it frees
+its blocks back to the pool when it finishes. Fragmentation nearly vanishes — the only waste is the partial
+final block — and because the mapping is indirect, blocks can even be *shared* across sequences with a common
+prefix. This is exactly virtual memory: logical addresses, a page table, and a physical frame pool.
+</Invariant>
+
+The block table is the whole idea: one level of indirection converts a contiguity requirement into a
+pool-allocation problem, and pool allocation does not fragment.
+
+## 3. Paging must not change the answer
+
+<Invariant note="the exactness invariant">
+Paging is a memory-layout optimization, so it must produce *bit-identical* output to a contiguous or
+full-recompute implementation. The acceptance test is exactly that: greedy generation through the paged
+cache must match greedy generation without it, token for token. If the block table's logical-to-physical
+mapping is correct, attention reads the same keys and values in the same order — the physical scattering is
+invisible to the math.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The lab's `PagedKVCache` holds K/V in fixed $16$-token physical blocks from a pool of $1024$, with a
+per-sequence block table mapping logical positions to physical slots; prefill reserves and fills blocks for
+the prompt, decode claims one more as needed. Its test pins the invariant: **paged incremental decode is
+bit-identical to full-recompute greedy generation** — the paging is provably invisible to the output.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```python
+cache = PagedKVCache(cfg, block_size=16, num_blocks=1024)
+cache.reserve(len(prompt))              # claim blocks for the prompt (prefill)
+# ... decode: when the current block fills, claim one more from the free pool
+cache.reserve(pos + 1)                  # logical position -> (possibly non-contiguous) physical block
+```
+</Versioned>
+
+**Where this goes.** With a cache that does not fragment, a server can hold many sequences at once — which
+is the premise of the scheduler that batches them. The last Part-5 chapter assembles the minimal serving
+stack around prefill, decode, and the paged cache.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2309.06180", label: "Kwon et al., PagedAttention / vLLM — the block-pool + block-table design" },
+  { tier: "T1", url: "https://arxiv.org/abs/2211.05102", label: "Pope et al. — the KV-cache memory pressure paging relieves" },
+]} />
