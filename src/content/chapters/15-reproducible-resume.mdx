@@ -1,0 +1,88 @@
+---
+title: "Deterministic Resume: The Bitwise Replay Gate"
+part: 3
+chapter: 16
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [determinism, checkpointing, resume, reproducibility, r1]
+concept_ids: [bitwise-resume, rng-state-capture, full-training-state, gate-a]
+description: "The gate that proves a checkpoint is complete: a resumed run must reproduce an uninterrupted run bit-for-bit, which holds only when every RNG stream is captured — and a negative test proves the RNG restoration is load-bearing."
+scenario_ids: [r1-tiny-train]
+code_path: "dist/gate_a.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T2", url: "https://pytorch.org/docs/stable/notes/randomness.html", label: "PyTorch — Reproducibility and RNG state" }
+  - { tier: "T1", url: "https://arxiv.org/abs/1710.03740", label: "Micikevicius et al. — Mixed Precision Training (2017)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Deterministic Resume: The Bitwise Replay Gate
+
+**Where we are.** The [training loop](/transformers-systems/chapters/14-training-loop/) saves a
+checkpoint. This chapter proves the checkpoint is *complete* by demanding the strongest property that
+distinguishes a real checkpoint from a lossy one: an interrupted-and-resumed run must reproduce an
+uninterrupted run **bit-for-bit**. Anything weaker hides a missing piece of state.
+
+## 1. Bitwise replay is the acceptance test
+
+<Invariant note="Gate A — the exact-resume invariant">
+Take an uninterrupted run of $2N$ steps. Take a second run that trains $N$ steps, checkpoints, and
+resumes for $N$ more from the checkpoint. **Gate A** requires the two final models to be *bit-identical*
+— not close, identical. This is a strong test on purpose: bitwise equality holds only if the checkpoint
+captured the full training state and round-tripped it through real serialization, so any dropped
+component (an optimizer moment, an RNG stream, the data cursor) is caught as a nonzero difference.
+</Invariant>
+
+"Close" is not good enough as an acceptance test, because "close" is exactly what a subtly incomplete
+checkpoint produces: the run drifts by a little, and the little compounds over a long training job into a
+different model. Bitwise equality has no tolerance to hide in.
+
+## 2. The RNG state is load-bearing
+
+<Invariant note="why every RNG stream must be captured">
+Training consumes randomness at many points — parameter init, dropout, data-shuffle order. If resume
+does not restore every RNG stream to its checkpointed position, the resumed run makes *different* random
+draws and diverges, even with identical weights and optimizer state. Restoring the RNG is therefore not
+hygiene; it is a correctness requirement, and the only way to know it is being done is to prove that
+*without* it the run diverges.
+</Invariant>
+
+The lab makes this concrete and non-tautological: each step samples its batch index through the torch
+RNG, so the RNG genuinely drives the trajectory. Then it asserts *both* directions — resume **with** RNG
+restoration is bit-identical, and resume **without** it provably diverges. The second assertion is what
+keeps the first honest: it proves the RNG restoration is doing work, not passing vacuously.
+
+## 3. Serialization must be real
+
+The checkpoint is written with `torch.save` and read back with `torch.load` before the resumed run — the
+gate exercises the *actual* serialization path, including the RNG and NumPy state, not an in-memory copy.
+A resume that works from a live object but not from a reloaded file is a bug the gate is designed to
+surface.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+Gate A holds on the pilot: a checkpoint-and-resume run is **bit-identical** to the uninterrupted run
+(max $|\Delta|=0$ over the parameters), the resumed loss tail matches exactly, and the negative test
+confirms a no-RNG resume *diverges* — so RNG restoration is proven load-bearing, not vacuous.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```python
+snap = torch.load(path, weights_only=False)   # round-trip through real serialization
+m2, _ = run(N, resume=snap, rng=True)         # WITH rng  -> bit-identical to uninterrupted
+m3, _ = run(N, resume=snap, rng=False)        # WITHOUT rng -> must diverge (asserted)
+assert torch.equal(flat(uninterrupted), flat(m2)) and not torch.equal(flat(uninterrupted), flat(m3))
+```
+</Versioned>
+
+**Where this goes.** R1 now trains and resumes correctly on one device. Part 4 takes it off one device:
+sharding the model across many, and proving a *harder* resume — that a checkpoint saved under one device
+count restores correctly under another.
+
+<SourceList sources={[
+  { tier: "T2", url: "https://pytorch.org/docs/stable/notes/randomness.html", label: "PyTorch — reproducibility and the RNG streams a checkpoint must capture" },
+  { tier: "T1", url: "https://arxiv.org/abs/1710.03740", label: "Micikevicius et al., Mixed Precision Training — determinism under a low-precision compute path" },
+]} />

@@ -1,0 +1,98 @@
+---
+title: "FlashAttention: A Kernel That Never Materializes the Scores"
+part: 3
+chapter: 14
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [flashattention, triton, kernels, io-aware, r1]
+concept_ids: [flash-attention, io-awareness, kernel-tiling, kernel-parity]
+description: "Why the memory-bound softmax is the bottleneck, how the online-softmax identity turns attention into a tiled kernel that never writes the score matrix, and how a from-scratch Triton kernel is pinned to correctness on Turing hardware."
+scenario_ids: [r1-tiny-train]
+code_path: "kernels/flash_attn.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2205.14135", label: "Dao et al. — FlashAttention: Fast and Memory-Efficient Exact Attention (2022)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2307.08691", label: "Dao — FlashAttention-2 (2023)" }
+  - { tier: "T2", url: "https://triton-lang.org/", label: "Triton — the GPU kernel language" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# FlashAttention: A Kernel That Never Materializes the Scores
+
+**Where we are.** The [online-softmax identity](/transformers-systems/chapters/12-forward-pass/) proved
+a tiled softmax equals the full one. FlashAttention is what that identity is *for*: a kernel that
+computes exact attention without ever writing the $L\times L$ score matrix to memory. This chapter builds
+a forward kernel in Triton and pins it to the identity — correctness first, on the 8 GB Turing card we
+actually have.
+
+## 1. Attention is memory-bound, not compute-bound
+
+<Invariant note="the score matrix is the bottleneck">
+Naïve attention forms the full $L\times L$ score matrix, writes it to memory, reads it back for the
+softmax, writes the probabilities, and reads them again for the value product. The arithmetic is modest;
+the traffic is quadratic in $L$. By Part 0's roofline this is **memory-bound** — the kernel spends its
+time moving the score matrix, not computing it. The fix is therefore not a faster multiply but *never
+writing the matrix at all*.
+</Invariant>
+
+This is the core reframing: attention's cost is IO, so the optimization target is bytes moved to and
+from high-bandwidth memory, exactly as the roofline predicted for a memory-bound op.
+
+## 2. Tiling with the identity
+
+<Invariant note="FlashAttention = online softmax, tiled, IO-aware">
+FlashAttention loads a block of queries into fast on-chip memory and streams blocks of keys and values
+past it, updating the running max, normalizer, and output accumulator by the online-softmax recurrence.
+The full score matrix is never materialized — only the small per-block tiles and the running state live
+in on-chip SRAM. Because the recurrence is *exact*, the result is exact attention; the win is entirely
+in the IO the tiling avoids. Causality is a loop bound: a query block only streams key blocks up to its
+own position.
+</Invariant>
+
+The kernel is thus the online-softmax identity written against the memory hierarchy: registers and SRAM
+for the running state, a single pass over K and V from memory, one write of the output. In the lab this
+is a Triton kernel — a query block per program, the running `(m_i, l_i, acc)` in registers, `sm_scale`
+$=1/\sqrt{d}$, and a causal loop bound.
+
+## 3. Correctness before speed — and why, on this hardware
+
+<Invariant note="the invariant is parity, not throughput">
+The lab kernel's contract is **correctness parity**, not FA2/FA3 speed. On a Turing (sm_75) card without
+the newer tensor-core and async-copy features, a hand-written kernel will not beat the vendor library on
+wall-clock — so pinning it to speed would be dishonest. What *is* portable and honest is the invariant:
+the kernel's output must equal a reference attention to floating-point tolerance. Real FA2/FA3 throughput
+and FP8 paths are a scale-tier concern, deferred by design.
+</Invariant>
+
+This is Part 0's methodology applied to a kernel: quote the metric the hardware can honestly support
+(parity), not the one it cannot (speed).
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The Triton forward kernel (`kernels/flash_attn.py`, tiled online-softmax, causal, block $64\times 64$)
+matches PyTorch's fused attention to $\sim 10^{-7}$ on the RTX 2070 SUPER — exact attention, no score
+matrix materialized. The parity test *is* the kernel's acceptance gate; throughput is explicitly not
+claimed on this hardware.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0 · triton==3.7.1">
+```python
+# online-softmax recurrence, per K/V block, inside the Triton kernel:
+m_new = tl.maximum(m_i, tl.max(qk, 1))       # running max
+alpha = tl.exp(m_i - m_new)                   # rescale prior state
+l_i   = l_i * alpha + tl.sum(p, 1)            # running normalizer
+acc   = acc * alpha[:, None] + tl.dot(p, v)   # running output — score matrix never stored
+```
+</Versioned>
+
+**Where this goes.** With a correct attention kernel, the model can train. The next chapter assembles the
+training loop around it — optimizer, mixed precision, and the checkpoints the resume gate will replay.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2205.14135", label: "Dao et al., FlashAttention — exact attention as an IO-aware tiled kernel" },
+  { tier: "T1", url: "https://arxiv.org/abs/2307.08691", label: "Dao, FlashAttention-2 — the throughput work deferred to the scale tier" },
+  { tier: "T2", url: "https://triton-lang.org/", label: "Triton — the language the lab kernel is written in" },
+]} />

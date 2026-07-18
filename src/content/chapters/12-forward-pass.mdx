@@ -1,0 +1,84 @@
+---
+title: "The Forward Pass and the Online-Softmax Identity"
+part: 3
+chapter: 13
+last_verified: 2026-07-17
+freshness: theoretical
+volatility: stable-principle
+tags: [attention, softmax, forward-pass, numerics, r1]
+concept_ids: [attention-forward, softmax-numerics, online-softmax, causal-masking]
+description: "Attention as a numerically-stable weighted average, and the online-softmax identity that lets a tiled computation equal the full softmax exactly — the algebraic fact the FlashAttention kernel rests on."
+scenario_ids: [r1-tiny-train]
+code_path: "model/r1.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/1706.03762", label: "Vaswani et al. — Attention Is All You Need (2017)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/1805.02867", label: "Milakov & Gimelshein — Online Normalizer Calculation for Softmax (2018)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Forward Pass and the Online-Softmax Identity
+
+**Where we are.** Part 2 decided R1; Part 3 builds it. We start at the one operation the whole
+architecture is organized around — attention — and prove the small algebraic identity that the next
+chapter's kernel exploits. Getting this identity right is what lets a tiled, memory-efficient kernel be
+*bit-comparable* to a textbook implementation rather than merely close.
+
+## 1. Attention is a stable weighted average
+
+<Invariant note="scaled dot-product attention">
+For queries $Q$, keys $K$, values $V$ of head dimension $d$, attention is a softmax-weighted average of
+values: $\text{Attn}(Q,K,V) = \text{softmax}\!\big(QK^\top/\sqrt{d}\big)V$. The scale $1/\sqrt{d}$ keeps
+the dot products from growing with dimension and saturating the softmax. In a causal decoder each query
+attends only to keys at its own position or earlier — the **causal mask** sets future scores to
+$-\infty$ before the softmax, so no position sees its own future.
+</Invariant>
+
+Softmax must be computed in a numerically stable way, and the standard trick is the seed of the whole
+chapter: subtract the row maximum before exponentiating. $\text{softmax}(s)_i = e^{s_i - m}/\sum_j
+e^{s_j - m}$ with $m=\max_j s_j$ is exactly equal to the naïve form but never overflows, because every
+exponent is $\le 0$.
+
+## 2. The online-softmax identity
+
+The stable form seems to need the *whole* row at once — you must know the max before you can
+exponentiate. The online-softmax identity says you do not: you can stream the row in blocks, carrying a
+running max, a running normalizer, and a running output, and correct them as each block arrives.
+
+<Invariant note="online softmax (the tiling identity)">
+Process the score row in blocks $j=1,2,\dots$. Maintain a running max $m^{(j)}$, normalizer
+$\ell^{(j)}$, and output accumulator $o^{(j)}$. On each block with local scores $s_i$ and values $v_i$:
+$$m^{(j)}=\max(m^{(j-1)},\max_i s_i),\quad \ell^{(j)}=\ell^{(j-1)}e^{m^{(j-1)}-m^{(j)}}+\textstyle\sum_i e^{s_i-m^{(j)}},\quad o^{(j)}=o^{(j-1)}e^{m^{(j-1)}-m^{(j)}}+\textstyle\sum_i e^{s_i-m^{(j)}}v_i.$$
+The correction factor $e^{m^{(j-1)}-m^{(j)}}$ rescales the prior running state whenever a new block
+raises the max. After the last block, $o/\ell$ equals the full softmax-weighted average **exactly** —
+no approximation, only a reassociation of the same sum.
+</Invariant>
+
+This is the identity that matters: a tiled softmax is not an *approximation* of the full softmax, it is
+the same number computed in a different order. That exactness is why the kernel in the next chapter can
+be validated to floating-point tolerance rather than accepted as "close enough."
+
+## 3. R1's forward pass
+
+R1's forward pass composes the pieces from Part 2's architecture chapter: RoPE-rotated queries and keys,
+grouped-query attention through this softmax, a SwiGLU feed-forward, pre-norm residuals, and a tied
+output projection. The reference implementation uses PyTorch's fused
+`scaled_dot_product_attention`, which itself computes attention by the online-softmax identity — so the
+model and the from-scratch kernel of the next chapter share one definition of the operation.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+R1-tiny's forward pass, run against the online-softmax kernel and against PyTorch's fused attention,
+agrees to floating-point tolerance ($\sim 10^{-7}$) — empirical confirmation that the tiled and full
+softmax compute the same value, as the identity promises.
+</Renewable>
+
+**Where this goes.** The identity is the license for a kernel that never stores the full score matrix.
+The next chapter builds exactly that in Triton and pins its correctness to this identity.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/1706.03762", label: "Vaswani et al., Attention Is All You Need — scaled dot-product attention" },
+  { tier: "T1", url: "https://arxiv.org/abs/1805.02867", label: "Milakov & Gimelshein, Online Normalizer Calculation for Softmax — the tiling identity" },
+]} />
