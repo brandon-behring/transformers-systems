@@ -1,0 +1,101 @@
+---
+title: "Serving the Doc-VLM: Grounding, Constrained Decoding, and the Deliverables Matrix"
+part: 7
+chapter: 32
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [document-ai, serving, constrained-decoding, grounding, r3]
+concept_ids: [constrained-decoding, evidence-localization, high-res-tiling, deliverables-matrix]
+description: "Serving the document model with a guarantee: a grammar that makes malformed markup impossible, evidence localization that ties every claim to a region, high-resolution tiling for dense pages — and the deliverables matrix that closes the guide's one-reference-model arc."
+scenario_ids: [r1-tiny-train]
+code_path: "vlm/spike.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2411.15100", label: "Dong et al. — XGrammar: Flexible and Efficient Structured Generation (2024)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2409.01704", label: "Wei et al. — GOT-OCR2.0: General OCR Theory (2024)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2306.14824", label: "Peng et al. — Kosmos-2: Grounding Multimodal LLMs to the World (2023)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Serving the Doc-VLM: Grounding, Constrained Decoding, and the Deliverables Matrix
+
+**Where we are.** The [trained doc-VLM](/transformers-systems/chapters/30-docvlm-training/) turns a page into
+markup. This final chapter serves it — with the serving stack of Part 5, plus three document-specific
+guarantees — and then closes the guide by showing that R3 is not a new system but the whole book's machinery,
+reused.
+
+## 1. Constrained decoding makes malformed output impossible
+
+<Invariant note="a grammar over the output vocabulary">
+Structured markup has a grammar — tags open and close, tables nest rows and cells — and free-form decoding
+can violate it, producing an unparseable answer. **Constrained decoding** enforces the grammar at generation
+time: at each step it masks the logits to only the tokens the grammar permits next, so the output is
+*guaranteed* well-formed by construction. This turns "the model usually produces valid markup" into "the
+model cannot produce invalid markup" — a correctness guarantee moved from hope to mechanism, at the cost of a
+grammar-mask computation per token.
+</Invariant>
+
+Constrained decoding composes with the paged KV-cache and continuous batching of Part 5 unchanged; it is an
+extra mask on the decode step's logits, not a new serving architecture.
+
+## 2. Grounding: tie every claim to a region
+
+<Invariant note="evidence localization">
+A document answer that cannot be traced to *where* on the page it came from is unverifiable. **Grounding**
+(evidence localization) makes the model emit, alongside content, the region it derived that content from — a
+box or a coordinate token sequence. This is the coordinate-token interface from Part 1 put to work: geometry
+is emitted as tokens, so a grounded answer is one token stream carrying both the *what* and the *where*.
+Grounding is what lets the eval-as-CI metric check not just that an answer is right but that it is
+*supported* — the difference between an OCR system and a citable one.
+</Invariant>
+
+## 3. High-resolution tiling for dense pages
+
+<Invariant note="tiling trades tokens for legibility">
+The fixed visual-token budget that keeps decode cheap also caps resolution — and a dense page (fine print, a
+large table) can exceed what one tile at that budget resolves. **Tiling** splits the page into overlapping
+crops, encodes each within the budget, and concatenates their visual tokens, trading a longer visual prefix
+(more KV-cache, higher TTFT) for legibility of small glyphs. This is the same prefill/decode economics of
+Part 5: tiling lengthens the compute-bound prefill to protect the accuracy of the memory-bound decode.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The pilot serves the doc-VLM through the same generation path as R1, proving the interface end to end;
+constrained decoding (a grammar over the document vocabulary), evidence localization (coordinate tokens), and
+high-resolution tiling are specified as the production serving profile — a Q(·) projection over R3 — and are
+the scale-tier build. Each is a documented extension of a Part-5 mechanism, not a new stack.
+</Renewable>
+
+## 4. The deliverables matrix: one reference model, carried through
+
+<Invariant note="what the guide delivered">
+R3 is the proof of the guide's thesis: a document-AI system is not a separate discipline but the text spine
+reused. It shares R0's tokenizer, R1's decoder and architecture, Part 3's training loop and kernels, Part 4's
+sharding, Part 5's serving and paged cache, and Part 6's alignment and eval-as-CI — adding only an encoder, a
+connector, and a grammar. Every number traces to a runnable fixture; every claim to a strict-live source; and
+one reference-model family runs unbroken from a parameter count to a served, grounded document parse.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The full arc holds on one 8 GB card: R1-tiny (6,327,552 params, predicted and measured to the byte) trains on
+R0 tokens, computes exact attention through a Triton kernel, resumes bit-for-bit, reshards across world size,
+serves through a paged KV-cache with output parity, and — as R3 — turns a page image into exact document
+markup. What exceeds 8 GB (7B decoders, multi-GPU throughput, real-corpus training) is named as the scale
+tier, designed-for and not overclaimed.
+</Renewable>
+
+**Where this ends.** This is the last chapter. The guide set out to carry one reference model from *decide*
+to *serve*, nuts and bolts, with every number honest — and R3 closes that arc: the document-AI north star is
+the same model, the same systems, and the same numbers contract, pointed at pixels. The measurement discipline
+of Part 0 is the through-line; the reference model is the object; and the scale tier is the horizon the whole
+guide was built to reach.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2411.15100", label: "Dong et al., XGrammar — efficient grammar-constrained generation" },
+  { tier: "T1", url: "https://arxiv.org/abs/2409.01704", label: "Wei et al., GOT-OCR2.0 — a unified page-to-markup serving model" },
+  { tier: "T1", url: "https://arxiv.org/abs/2306.14824", label: "Peng et al., Kosmos-2 — grounding outputs to image regions" },
+]} />

@@ -1,0 +1,84 @@
+---
+title: "Vision Encoders: From CNNs to ViT, and the Document Image Pipeline"
+part: 7
+chapter: 29
+last_verified: 2026-07-17
+freshness: literature-survey
+volatility: feature-surface
+tags: [document-ai, vision-encoder, vit, r3, multimodal]
+concept_ids: [vision-encoder, vit-patches, visual-tokens, document-rendering]
+description: "How a page image becomes a sequence of visual tokens: the patch-embedding view of a Vision Transformer, the fixed token budget that must survive small glyphs, and the deterministic render contract that prohibits reading the text layer."
+scenario_ids: [r1-tiny-train]
+code_path: "vlm/spike.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2010.11929", label: "Dosovitskiy et al. — An Image is Worth 16x16 Words (ViT, 2020)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2502.14786", label: "Tschannen et al. — SigLIP 2 (2025)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2304.02643", label: "Kirillov et al. — Segment Anything (SAM, 2023)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Vision Encoders: From CNNs to ViT, and the Document Image Pipeline
+
+**Where we are.** Parts 0–6 built the text model R1 end to end. Part 7 reaches the north star: **R3**, a
+document-AI model that reads a page *image* and writes structured markup — reusing R1's tokenizer, decoder,
+and every system built so far, and adding one thing, a visual input path. This chapter is the front of that
+path: turning pixels into tokens the decoder can consume.
+
+## 1. A Vision Transformer is a patch tokenizer
+
+<Invariant note="the ViT view">
+A Vision Transformer treats an image the way a language model treats text: cut it into a grid of
+fixed-size **patches**, linearly embed each patch into a vector, add position information, and run a
+transformer. A patch is to an image what a token is to a sentence — so an image becomes a *sequence of
+visual tokens*, and everything the text spine knows about attention over sequences applies. The move from
+convolutional encoders to ViTs is exactly this reframing: image understanding as sequence modeling.
+</Invariant>
+
+For documents this framing is decisive: a page is already a grid, and its structure (columns, rows, cells)
+is spatial, so a patch sequence with position information is a natural substrate for layout.
+
+## 2. The token budget must survive small glyphs
+
+<Invariant note="the visual-token budget">
+The number of visual tokens is a fixed budget, and for documents it is the central tension: too few tokens
+and small glyphs — subscripts, decimal points, thin strokes — are averaged away before the decoder ever sees
+them; too many and the decoder's context and the attention cost explode. Document encoders therefore fix a
+budget chosen for *small-glyph survival* (e.g. a $1024^2$ page to $256$ visual tokens) rather than for
+natural-image semantics, which is why a document-tuned encoder differs from a photo-tuned one.
+</Invariant>
+
+This is a systems constraint dressed as a modeling choice: the token budget sets the KV-cache the visual
+prefix occupies and the resolution at which fine print is still legible, and the two pull in opposite
+directions.
+
+## 3. The render contract: image only, no text layer
+
+<Invariant note="render to image, never read the text layer">
+A document-AI model must earn its structure from *pixels*, so the input pipeline is a deterministic render
+contract: a pinned renderer at a fixed DPI, fixed rotation, and a pinned fallback font set, producing one
+image per page. Crucially, when the source is a born-digital PDF that *contains* a text layer, that layer is
+**prohibited** from the input path — reading it would leak the answer and the model would learn to copy text
+rather than read the image. The determinism guarantee is "identical output given identical renderer version
+and inputs," so the visual input is as reproducible as R0's tokens.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The pilot's interface spike patchifies a rendered page into **16 visual tokens** through a tiny
+patch-embedding encoder (a stand-in for a frozen SAM/SigLIP2 encoder), proving the pixels→visual-tokens
+front end wires into the decoder on Tier-0 with no model downloads. Production encoders (frozen SAM-style or
+SigLIP2, a $256$-token budget) and the full render contract (pinned renderer, fixed DPI, no text-layer
+leakage) are specified in the R0/R3 contract and are the scale-tier build.
+</Renewable>
+
+**Where this goes.** Visual tokens are in the encoder's embedding space, not the decoder's. The next chapter
+is the connector that bridges the two — and treats the visual tokens as a prefix the decoder attends to.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2010.11929", label: "Dosovitskiy et al., ViT — images as patch-token sequences" },
+  { tier: "T1", url: "https://arxiv.org/abs/2502.14786", label: "Tschannen et al., SigLIP 2 — a strong document-capable vision encoder" },
+  { tier: "T1", url: "https://arxiv.org/abs/2304.02643", label: "Kirillov et al., SAM — the ViT-det encoder lineage used for high-resolution pages" },
+]} />

@@ -1,0 +1,89 @@
+---
+title: "The Vision-Language Connector: Image Tokens in the Decoder"
+part: 7
+chapter: 30
+last_verified: 2026-07-17
+freshness: literature-survey
+volatility: feature-surface
+tags: [document-ai, connector, projector, multimodal, r3]
+concept_ids: [vl-connector, mlp-projector, visual-token-budget, prefix-tokens]
+description: "The bridge from the encoder's space to the decoder's: a projector that maps visual tokens into the decoder's embedding space, where they become a prefix the text decoder attends to through the same KV-cache."
+scenario_ids: [r1-tiny-train]
+code_path: "vlm/spike.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2304.08485", label: "Liu et al. — Visual Instruction Tuning (LLaVA, 2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2204.14198", label: "Alayrac et al. — Flamingo: a Visual Language Model (2022)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Vision-Language Connector: Image Tokens in the Decoder
+
+**Where we are.** The [vision encoder](/transformers-systems/chapters/28-vision-encoders/) produced visual
+tokens in *its* embedding space. The decoder speaks a *different* space — R1's $d_\text{model}$. This chapter
+is the connector between them, and the design decision it embodies: make visual tokens look exactly like
+text tokens so the entire text decoder works unchanged.
+
+## 1. The projector maps into the decoder's space
+
+<Invariant note="the connector">
+The connector maps each visual token from the encoder's output dimension into the decoder's embedding
+dimension, so that a visual token becomes indistinguishable — in shape and space — from a text token
+embedding. The simplest connector that works is a small **MLP projector** (two linear layers with a
+nonlinearity); more elaborate connectors *resample* many visual tokens down to a fixed few. Whatever its
+form, the connector's contract is the same: emit vectors in the decoder's embedding space.
+</Invariant>
+
+The elegance is that once visual tokens are in the decoder's space, *nothing else changes*: the same
+attention, the same RoPE, the same SwiGLU blocks, the same tied output head. The document model is the text
+model with a longer, partly-visual prefix.
+
+## 2. Visual tokens are a prefix in the KV-cache
+
+<Invariant note="images occupy the prefix">
+The projected visual tokens are prepended to the text tokens, so the decoder attends over `[visual prefix |
+text]` as one sequence. In serving terms, the visual tokens are computed once during **prefill** and live in
+the KV-cache exactly like prompt tokens — every serving idea from Part 5 (prefill/decode split, the paged
+cache, GQA's smaller footprint) applies to them unchanged. The visual prefix's length is the token budget
+from the previous chapter, and it is the fixed cost every generated markup token attends back to.
+</Invariant>
+
+This is why the encoder's token budget was a *systems* number: those tokens are KV-cache entries in the
+decode loop, so a $256$-token visual prefix is a $256$-position cache the whole document generation streams
+against.
+
+## 3. Train the connector, freeze the rest (first)
+
+<Invariant note="staged training aligns the spaces cheaply">
+Because the encoder already sees and the decoder already writes, the only thing initially missing is the
+*alignment* between their spaces — which is exactly what the connector provides. So the first training stage
+freezes both the encoder and the decoder and trains **only the connector**, cheaply teaching the decoder to
+interpret visual tokens. Later stages unfreeze the decoder (often via the PEFT of Part 6) to adapt it to the
+document task. The connector is trained first because it is the smallest sufficient change.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The pilot's connector is a 2-layer MLP projector (Linear → GELU → Linear) mapping the encoder's visual
+tokens into R1-tiny's $d_\text{model}=256$ space, prepended to the text embeddings; the decoder then runs
+unchanged. This proves the space-bridging wiring end to end on Tier-0. The LLaVA-style staged schedule
+(freeze encoder+decoder, train projector; then PEFT the decoder) is the specified production recipe.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```python
+vis = self.projector(self.enc(img))       # visual tokens -> decoder embedding space
+txt = self.dec.embed(text_ids)            # text tokens -> same space
+h   = self.dec_forward(torch.cat([vis, txt], dim=1))   # [visual prefix | text], decoder unchanged
+```
+</Versioned>
+
+**Where this goes.** With encoder, connector, and decoder wired, the model can be *trained* to turn a page
+into markup. The next chapter is that training — and why a single overfit document is the right first proof.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2304.08485", label: "Liu et al., LLaVA — the MLP projector and staged visual instruction tuning" },
+  { tier: "T1", url: "https://arxiv.org/abs/2204.14198", label: "Alayrac et al., Flamingo — the connector/resampler taxonomy" },
+]} />

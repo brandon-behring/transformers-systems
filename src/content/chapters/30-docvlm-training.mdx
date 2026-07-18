@@ -1,0 +1,94 @@
+---
+title: "Training the Doc-VLM: Layout to Structured Markup"
+part: 7
+chapter: 31
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [document-ai, training, markup, r3, multimodal]
+concept_ids: [llava-staged-training, markup-supervision, interface-spike, tier-boundary]
+description: "Training a page-to-markup model: supervising the decoder on the document-control vocabulary, why overfitting one document is the right first proof of the interface, and the exact boundary where the pilot hands off to the scale tier."
+scenario_ids: [r1-tiny-train]
+code_path: "vlm/spike.py"
+tests_path: "tests/test_r1_tiny_fixture.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2308.13418", label: "Blecher et al. — Nougat: Neural Optical Understanding for Academic Documents (2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2304.08485", label: "Liu et al. — Visual Instruction Tuning (LLaVA, 2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2111.15664", label: "Kim et al. — Donut: OCR-free Document Understanding (2022)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Training the Doc-VLM: Layout to Structured Markup
+
+**Where we are.** The [connector](/transformers-systems/chapters/29-vl-connector/) put visual tokens in the
+decoder's space. Now the model learns the task: given a page image, produce the structured markup that
+encodes its content and layout. The training objective is one we already have — next-token prediction — over
+the document-control vocabulary R0 reserved.
+
+## 1. Markup supervision is next-token prediction over the reserved vocabulary
+
+<Invariant note="the document target is a token sequence">
+The training target for a page is its ground-truth markup: a token sequence over the *same* vocabulary as
+text, interleaving content with the reserved structural tags (`<page> <region> <table> <tr> <td> <formula>`,
+terminated by `<eos_doc>`). Supervision is teacher-forced next-token prediction on that sequence, conditioned
+on the visual prefix — identical to R1's training loss, differing only in what conditions it. So the entire
+Part-3 training machinery (optimizer, mixed precision, deterministic resume) transfers with no change; only
+the data — (image, markup) pairs — is new.
+</Invariant>
+
+This is the payoff of the R0 decision to reserve the document vocabulary in the *shared* tokenizer: the
+document model needs no new loss, no new head, and no re-tokenization. Layout is emitted as tokens, and
+tokens are what the decoder already predicts.
+
+## 2. Overfit one document first
+
+<Invariant note="the interface spike">
+Before training on a corpus, prove the *interface* on a single example: overfit one (image, markup) pair
+until greedy decoding reproduces the exact target markup. This is a deliberately tiny test with a precise
+purpose — it isolates the wiring (pixels → encoder → projector → decoder → valid markup) from the far harder
+question of generalization. If the model cannot memorize one page's markup, the interface is broken; if it
+can, the interface is proven and the remaining work is data and scale. Overfitting-one is to a VLM what the
+parity test is to a kernel: the smallest experiment that pins correctness of the mechanism.
+</Invariant>
+
+## 3. The tier boundary, stated honestly
+
+<Invariant note="what the pilot proves and what forces the scale tier">
+The single-GPU pilot proves the interface — a frozen-encoder → projector → small-decoder path overfitting one
+document to exact markup. What it *cannot* do, and does not pretend to, is the production build: a 7B-class
+decoder (tens of GB), multi-page contexts of thousands of tokens, high-resolution tiling, batched training,
+and a real annotated document corpus. Those are the scale tier, designed-for but not built on 8 GB. Naming
+the boundary is itself a systems deliverable: it says exactly which claims are measured and which are
+specified.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The interface spike overfits one page whose target markup is
+`<page><formula>E=mc^2</formula></page>`: training drives the loss down until **greedy decoding reproduces
+the exact markup token sequence**, confirming pixels → encoder → projector → R1-tiny decoder → valid
+document markup end to end. The exact-match assertion is the acceptance gate; corpus-scale training, high-res
+tiling, and a 7B decoder are the specified scale-tier extension.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```python
+markup   = tok.encode("<page><formula>E=mc^2</formula></page>").ids   # target: shared doc vocab
+text_in  = [bos] + markup[:-1]                    # teacher forcing
+loss     = docvlm(page_image, text_in, markup)    # next-token loss over the reserved vocabulary
+assert docvlm.generate(page_image, bos, len(markup)) == markup        # greedy == exact markup
+```
+</Versioned>
+
+**Where this goes.** A trained doc-VLM must be *served* — and served with a guarantee that its output is
+well-formed markup grounded in the page. The final chapter is serving, constrained decoding, and the
+deliverables matrix that closes the guide.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2308.13418", label: "Blecher et al., Nougat — page image to structured markup" },
+  { tier: "T1", url: "https://arxiv.org/abs/2304.08485", label: "Liu et al., LLaVA — staged visual instruction tuning" },
+  { tier: "T1", url: "https://arxiv.org/abs/2111.15664", label: "Kim et al., Donut — OCR-free page-to-structure training" },
+]} />
