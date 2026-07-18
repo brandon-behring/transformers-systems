@@ -1,0 +1,80 @@
+---
+title: "PEFT and the Val-Loss Trap"
+part: 6
+chapter: 26
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [alignment, peft, lora, evaluation, checkpointing]
+concept_ids: [lora, peft, surrogate-loss, checkpoint-selection]
+description: "LoRA makes fine-tuning cheap by training a thin low-rank overlay on a frozen backbone — and cheap iteration exposes a trap: validation loss keeps improving past the point where the metric you ship has peaked."
+scenario_ids: [r1-tiny-train]
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2106.09685", label: "Hu et al. — LoRA: Low-Rank Adaptation of Large Language Models (2021)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2110.04366", label: "He et al. — Towards a Unified View of Parameter-Efficient Transfer Learning (2021)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# PEFT and the Val-Loss Trap
+
+**Where we are.** [SFT](/transformers-systems/chapters/24-sft/) adapts a model by updating its weights —
+expensive to store and slow to iterate. This chapter makes adaptation cheap with a low-rank overlay, and
+then delivers the lesson cheap iteration exposes: the loss you train is a *surrogate*, and selecting on it
+ships the wrong model.
+
+## 1. LoRA: train the overlay, freeze the backbone
+
+<Invariant note="low-rank adaptation">
+LoRA freezes the pretrained weight $W$ and learns a low-rank *overlay* $BA$ added on top, so the effective
+weight is $W + BA$ with only $B$ (tall-skinny) and $A$ (short-wide) trainable. For a $d\times d$ projection
+at rank $r$, the trainable count drops from $d^2$ to $2rd$ — at $r \ll d$ a reduction of hundreds of times.
+Because the frozen backbone is shared, one can keep a *different* small overlay per task and swap them
+without touching the expensive base weights.
+</Invariant>
+
+The engineering payoff is iteration speed: a LoRA fine-tune trains a tiny fraction of the parameters, fits
+far more easily in memory (no optimizer state for the frozen weights), and produces a small artifact. This
+is what makes running *many* fine-tunes — and therefore the selection problem below — practical.
+
+## 2. The val-loss trap
+
+<Invariant note="the loss is a surrogate for the metric">
+The quantity you optimize (validation cross-entropy) is not the quantity you ship (task accuracy — for the
+document model, correct *structure*). These can move in opposite directions: validation loss keeps
+improving past the point where the shipped metric has already peaked, because lower per-token loss can
+reflect over-confidence and stylistic mimicry rather than more-correct answers. **Selecting the checkpoint
+with the lowest validation loss can therefore ship a strictly worse model than an earlier one.**
+</Invariant>
+
+The fix is a discipline, not a hyperparameter: run the *real* metric inside the training loop and select
+the checkpoint that scores best on **it**, not on the loss. This is the single most common way a
+fine-tuning pipeline silently underperforms — it optimizes and selects on the surrogate throughout, and
+never looks at the metric until it is too late.
+
+## 3. Why this belongs to systems, not just modeling
+
+Selecting on the metric means the metric must *run in CI* — cheaply, deterministically, every checkpoint —
+which is a systems requirement: the evaluation has to be fast enough to run inline and reproducible enough
+to compare across runs. The val-loss trap is thus the bridge to the eval-as-CI chapter: checkpoint
+selection is only as trustworthy as the automated metric behind it.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The parameter arithmetic is exact and checkable: a rank-$8$ LoRA overlay on one of R1-tiny's
+$256\times256$ attention projections trains $2\cdot 8\cdot 256 = 4{,}096$ parameters versus $65{,}536$ for
+the full matrix — a $16\times$ reduction on that projection, and far larger on the wide vocabulary matrix.
+The val-loss-trap discipline (select on the metric) is specified as a checkpoint-selection policy; the
+metric it selects on is the subject of the eval-as-CI chapter.
+</Renewable>
+
+**Where this goes.** SFT and PEFT teach *format* from demonstrations. But some behaviors are easier to
+*judge* than to *demonstrate* — and for those we optimize against a preference or a verifier, the subject
+of the next chapter.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2106.09685", label: "Hu et al., LoRA — the frozen-backbone low-rank overlay" },
+  { tier: "T1", url: "https://arxiv.org/abs/2110.04366", label: "He et al. — a unified view of parameter-efficient fine-tuning" },
+]} />

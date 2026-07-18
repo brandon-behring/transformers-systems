@@ -1,0 +1,81 @@
+---
+title: "Eval-as-CI and Statistical Rigor"
+part: 6
+chapter: 28
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [evaluation, ci, statistics, contamination, alignment]
+concept_ids: [eval-as-ci, benchmark-contamination, significance-testing, eval-regression]
+description: "Turning evaluation into continuous integration: an automated metric on a frozen, decontaminated set, run every change, reported with the statistical rigor to distinguish a real gain from noise — the discipline every earlier alignment stage silently depends on."
+scenario_ids: [r1-tiny-train]
+code_path: "bench/contract.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2211.09110", label: "Liang et al. — Holistic Evaluation of Language Models (HELM, 2022)" }
+  - { tier: "T1", url: "https://aclanthology.org/P18-1128/", label: "Dror et al. — The Hitchhiker's Guide to Testing Statistical Significance in NLP (2018)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Eval-as-CI and Statistical Rigor
+
+**Where we are.** [Checkpoint selection](/transformers-systems/chapters/25-peft-valloss/) needs a metric,
+and [RLVR](/transformers-systems/chapters/26-preference-optimization/) needs a verifier. Both are the same
+thing: an automated evaluation that runs every change. This chapter makes that evaluation a CI citizen and
+gives it the statistical rigor without which "the model improved" is a guess.
+
+## 1. Evaluation is continuous integration
+
+<Invariant note="eval-as-CI">
+An evaluation that is run occasionally, by hand, on an ad-hoc set is not a control — it is an anecdote. An
+evaluation is a *control* when it runs automatically on every change, against a **frozen, versioned**
+dataset, and blocks a regression the way a failing unit test blocks a merge. This is the numbers contract
+of Part 0 applied to behavior: the eval set is checksummed, the metric is deterministic, and a drop is a CI
+failure, not a discussion.
+</Invariant>
+
+The document model makes this concrete: its structural metric — does the produced markup match the
+ground-truth structure — runs on a frozen document set every checkpoint, and a checkpoint that regresses it
+is rejected automatically. Selection, RLVR reward, and CI gate are one metric.
+
+## 2. Contamination invalidates the measurement
+
+<Invariant note="the eval set must be disjoint from training">
+A benchmark score is meaningless if the benchmark leaked into training: the model then *recalls* the answer
+instead of *solving* the task, and the number measures memorization, not capability. Guarding against it is
+a data-pipeline discipline — the eval and contamination-probe document ids are excluded from training by
+hash, and any external eval set is n-gram-decontaminated against the corpus. This is why R0 froze a
+held-out contamination probe: the eval's validity is a *property of the data contract*, established before
+training, not a hope checked after.
+</Invariant>
+
+## 3. Statistical rigor: is the gain real?
+
+<Invariant note="report distributions and test significance">
+A single eval number is a sample. Two checkpoints whose scores differ by less than the measurement's noise
+are not distinguishable, and shipping the "better" one is a coin flip dressed as progress. Rigor means
+reporting a metric with a confidence interval (e.g. bootstrapped over the eval set), running enough seeds to
+estimate run-to-run variance, and applying a significance test before claiming an improvement — with a
+correction when many variants are compared, or the best-of-many will look good by chance alone. This is
+Part 0's "report a distribution, not a point," now guarding *quality* rather than *throughput*.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The guide *practices* eval-as-CI on itself: the numbers-contract validator, the golden accounting fixture,
+and the kernel/gate parity tests run as CI and fail the build on any drift — the same discipline this
+chapter prescribes for model quality, applied to the guide's own numbers. The model-quality eval harness
+(structural metric on a frozen document set) is specified as the R3 selection-and-reward signal; it is
+design-forward on Tier-0, reusing this machine.
+</Renewable>
+
+**Where this goes.** Part 6 completes the text model's lifecycle — capability, format, preference, and the
+CI that guards them. Part 7 turns to the north star: the document-AI system R3, which reuses everything the
+text spine built and adds a visual path, closing the family DAG.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2211.09110", label: "Liang et al., HELM — holistic, multi-metric, standardized evaluation" },
+  { tier: "T1", url: "https://aclanthology.org/P18-1128/", label: "Dror et al. — significance testing for NLP comparisons" },
+]} />

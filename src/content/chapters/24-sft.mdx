@@ -1,0 +1,79 @@
+---
+title: "The Training Recipe: Pretrain, then Supervised Fine-Tune"
+part: 6
+chapter: 25
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [alignment, sft, instruction-tuning, recipe]
+concept_ids: [pretraining-vs-sft, instruction-tuning, recipe-stages, data-quality]
+description: "The two-stage recipe that turns a next-token predictor into a model that follows instructions: what pretraining and supervised fine-tuning each optimize, why the second is small and data-quality-bound, and where the reference model sits in it."
+scenario_ids: [r1-tiny-train]
+code_path: "m1a_real.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2203.02155", label: "Ouyang et al. — Training LMs to Follow Instructions (InstructGPT, 2022)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2305.11206", label: "Zhou et al. — LIMA: Less Is More for Alignment (2023)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Training Recipe: Pretrain, then Supervised Fine-Tune
+
+**Where we are.** Parts 3–5 built, scaled, and served a model that predicts the next token. Part 6 is
+about *behavior*: turning that predictor into a model that does what a user asks. The recipe has stages,
+and the first lesson is that they optimize different things — confusing them is how alignment budgets get
+misallocated.
+
+## 1. Two stages, two objectives
+
+<Invariant note="pretraining vs supervised fine-tuning">
+**Pretraining** optimizes next-token likelihood over a broad corpus; it buys *capability* — the world
+knowledge and language competence latent in the weights — and consumes almost all the compute.
+**Supervised fine-tuning (SFT)** continues the same next-token objective, but on a small, curated set of
+*instruction–response* demonstrations; it buys *format* — teaching the model to apply its capability in
+the shape of a helpful answer. SFT does not add much knowledge; it surfaces knowledge the pretrained model
+already has, in the interface a user expects.
+</Invariant>
+
+The practical consequence is a budget rule: capability problems are pretraining (or data) problems, and
+are expensive to fix; format problems are SFT problems, and are cheap. Trying to fix a capability gap with
+more SFT data mostly teaches the model to *sound* more confident, not to *be* more correct.
+
+## 2. SFT is small and data-quality-bound
+
+<Invariant note="quality over quantity in SFT">
+Because SFT surfaces existing capability rather than installing new capability, its returns are dominated
+by *data quality*, not quantity: a few thousand carefully-written, diverse demonstrations can outperform
+orders of magnitude more noisy ones. The failure mode is training on low-quality or homogeneous
+demonstrations, which teaches a narrow style and can *degrade* the broad capability pretraining bought.
+SFT is a scalpel, not a firehose.
+</Invariant>
+
+This is why the SFT stage is short and its data is expensive to produce: the leverage is entirely in
+curation. The document model R3 will use exactly this stage — a small set of (page, structured-markup)
+demonstrations — to teach the pretrained decoder the *format* of document output.
+
+## 3. Where the reference model sits
+
+R1-tiny's pilot exercises the pretraining stage: it trains the next-token objective on R0 tokens and
+descends in loss. SFT is the *same loop* — same optimizer, same loss, same checkpoint format — run on
+instruction data instead of raw corpus, starting from the pretrained checkpoint. Because the loop is
+identical, everything Part 3 proved (mixed precision, deterministic resume) carries over unchanged.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The pilot has the pretraining stage measured — R1-tiny descends $9.07 \to 6.26$ on R0 tokens — which is the
+checkpoint an SFT stage would continue from. SFT itself is specified as the same training loop on curated
+demonstrations; it is design-forward on Tier-0 (the loop is proven, the demonstration set is the missing
+input), and reuses the Part-3 training and checkpoint machinery without modification.
+</Renewable>
+
+**Where this goes.** Full fine-tuning updates every parameter, which is expensive to store and to iterate
+on. The next chapter makes fine-tuning cheap — and warns about the trap that cheap iteration exposes.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2203.02155", label: "Ouyang et al., InstructGPT — the pretrain→SFT→preference recipe" },
+  { tier: "T1", url: "https://arxiv.org/abs/2305.11206", label: "Zhou et al., LIMA — SFT returns are dominated by data quality, not quantity" },
+]} />

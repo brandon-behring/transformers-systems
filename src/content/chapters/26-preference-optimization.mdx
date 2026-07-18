@@ -1,0 +1,87 @@
+---
+title: "Preference Optimization: RLHF to RLVR"
+part: 6
+chapter: 27
+last_verified: 2026-07-17
+freshness: literature-survey
+volatility: feature-surface
+tags: [alignment, rlhf, dpo, rlvr, preference]
+concept_ids: [rlhf, reward-model, dpo, rlvr]
+description: "Optimizing behaviors that are easier to judge than to demonstrate: a reward model from human preferences, the policy-gradient loop of RLHF, its direct-optimization shortcut DPO, and the shift to verifiable rewards where a checker replaces the judge."
+scenario_ids: [r1-tiny-train]
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2203.02155", label: "Ouyang et al. — InstructGPT / RLHF (2022)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2305.18290", label: "Rafailov et al. — Direct Preference Optimization (DPO, 2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2411.15124", label: "Lambert et al. — Tülu 3 / RL with Verifiable Rewards (2024)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Preference Optimization: RLHF to RLVR
+
+**Where we are.** [SFT](/transformers-systems/chapters/24-sft/) taught format by *demonstration*. But many
+qualities we want — helpfulness, harmlessness, correct reasoning — are far easier to *judge* than to
+demonstrate. This chapter is about optimizing against a judgment: a learned reward, a direct preference
+objective, and the shift to verifiable rewards. *(The formal companion guide derives the preference-
+optimization objectives; here we treat them as a systems pipeline.)*
+
+## 1. RLHF: learn a reward, then optimize it
+
+<Invariant note="the RLHF loop">
+Reinforcement learning from human feedback has three steps. **(1)** Collect human *preferences* between
+pairs of model outputs. **(2)** Fit a **reward model** that scores an output with a scalar predicting human
+preference. **(3)** Optimize the policy (the LM) to maximize that reward, with a KL penalty toward the SFT
+model so it does not drift into reward-hacking gibberish. The reward model turns a judgment that is hard to
+*write down* into a differentiable signal.
+</Invariant>
+
+The systems cost is real: RLHF runs *four* models at once — the policy, a frozen reference for the KL term,
+the reward model, and (in PPO) a value model — so it is memory- and orchestration-heavy relative to SFT.
+
+## 2. DPO: skip the reward model
+
+<Invariant note="direct preference optimization">
+Direct Preference Optimization removes the separate reward model and RL loop. Using the insight that the
+optimal RLHF policy has a closed-form relationship to the reward, DPO rewrites the objective as a *supervised*
+classification loss directly on preference pairs — increasing the log-probability margin between the
+preferred and dispreferred response, regularized toward the reference model. One model, one supervised
+loss, no sampling loop — much simpler to run, at some cost in the flexibility a separate reward model
+allows.
+</Invariant>
+
+DPO is the pragmatic default for many alignment pipelines precisely because it collapses the four-model
+RLHF system into something that looks like SFT with a preference-shaped loss.
+
+## 3. RLVR: replace the judge with a checker
+
+<Invariant note="reinforcement learning from verifiable rewards">
+When correctness is *checkable* — a math answer, a unit test, a document parse that either matches the
+ground-truth structure or does not — the reward model can be replaced by a **verifier**: a program that
+returns a reward with no human and no learned judge. This is RL from verifiable rewards. It removes the
+reward model's noise and reward-hacking surface entirely, and it is exactly the regime a document-AI model
+lives in: a produced markup is scored against ground truth by a metric, not by a preference. The reward is
+the metric from the eval-as-CI chapter.
+</Invariant>
+
+RLVR is why the document model's evaluation and its *training signal* converge: the same structural metric
+that selects checkpoints can serve as the verifiable reward.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+Preference optimization is **design-forward** on Tier-0 — the pilot proves the pretraining loop these
+methods start from, and specifies where each fits (DPO as the pragmatic default; RLVR for the document
+model, where a structural verifier supplies the reward). The multi-model memory cost of full RLHF is what
+makes DPO and RLVR the tractable choices at the reference scale.
+</Renewable>
+
+**Where this goes.** Every stage in this part — SFT selection, PEFT checkpointing, RLVR rewards — depends on
+a metric that runs automatically and reproducibly. The last Part-6 chapter makes that metric a first-class
+CI citizen, with the statistical rigor to tell a real improvement from noise.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2203.02155", label: "Ouyang et al., InstructGPT — the reward-model + policy-optimization loop" },
+  { tier: "T1", url: "https://arxiv.org/abs/2305.18290", label: "Rafailov et al., DPO — preference optimization without a reward model" },
+  { tier: "T1", url: "https://arxiv.org/abs/2411.15124", label: "Lambert et al., Tülu 3 — RL with verifiable rewards" },
+]} />
