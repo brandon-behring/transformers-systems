@@ -1,0 +1,98 @@
+---
+title: "FSDP2 and Distributed Checkpoint: Resharding Across World Size"
+part: 4
+chapter: 19
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [fsdp, distributed-checkpoint, resharding, gate-b, scaling]
+concept_ids: [fsdp-sharding, distributed-checkpoint, world-size-agnostic, gate-b]
+description: "Sharded data parallelism with FSDP2, and the harder resume it demands: a Distributed Checkpoint written under one device count must load correctly under another — model and optimizer both."
+scenario_ids: [r1-tiny-train]
+code_path: "dist/gate_b.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2304.11277", label: "Zhao et al. — PyTorch FSDP: Fully Sharded Data Parallel (2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/1910.02054", label: "Rajbhandari et al. — ZeRO: Memory Optimizations (2019)" }
+  - { tier: "T2", url: "https://pytorch.org/docs/stable/distributed.checkpoint.html", label: "PyTorch — Distributed Checkpoint (DCP)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# FSDP2 and Distributed Checkpoint: Resharding Across World Size
+
+**Where we are.** The [parallelism ladder](/transformers-systems/chapters/17-parallelism-ladder/) named
+sharded data parallelism as the rung the pilot can prove. This chapter builds it with FSDP2 and pins the
+hardest correctness property distributed training adds: a checkpoint written under one device count must
+restore under a *different* one. Gate A proved same-topology resume; Gate B proves resume across
+topologies.
+
+## 1. FSDP shards the model state across the data-parallel group
+
+<Invariant note="fully sharded data parallelism">
+FSDP splits the model's parameters, gradients, and optimizer state across the data-parallel ranks — each
+rank holds a *shard*, not a replica. Before a layer runs, its full parameters are gathered on demand
+(an all-gather); after the backward, gradients are reduced and re-scattered so each rank keeps only its
+shard's gradient (a reduce-scatter). Peak memory per device therefore falls roughly with the number of
+ranks, which is what lets a model whose *state* exceeds one device still train — at the cost of the
+gather/scatter communication.
+</Invariant>
+
+FSDP is the sharded form of data parallelism from the ladder: same once-per-step gradient logic, but the
+state is partitioned rather than replicated, trading communication for the memory headroom the wall
+demanded.
+
+## 2. Resharding is the real checkpoint test
+
+<Invariant note="Gate B — cross-world-size load">
+A **Distributed Checkpoint (DCP)** stores the sharded state in a layout that is *world-size-agnostic*:
+it can be written by $W_1$ ranks and read by $W_2 \ne W_1$ ranks, with the runtime redistributing the
+shards on load. **Gate B** demands exactly this: a checkpoint saved under world size 2 must load under
+world size 1 (or vice versa) and reproduce the model *and the optimizer moments* exactly. Optimizer
+state is the subtle half — a checkpoint that resharded the weights but corrupted the moments would resume
+with a broken optimizer, so the gate verifies both.
+</Invariant>
+
+This is why elasticity — resuming a job on a different number of nodes after a failure or a rescheduling
+— is a *checkpoint-format* property, not a runtime flag. If the checkpoint is not world-size-agnostic,
+changing the node count means restarting from scratch.
+
+## 3. Honest scope on one GPU
+
+<Invariant note="what the pilot proves, and what it defers">
+On a single-GPU Tier-0 machine the model is *replicated* across gloo/CPU ranks, so the gate pins DCP's
+world-size-agnostic *load* of replicated state plus optimizer — the serialization-and-redistribution
+contract — but not the genuine partition-metadata redistribution of truly sharded parameters, which needs
+real multi-GPU hardware. The verdict is broadcast so **every** rank exits nonzero on failure, closing the
+silent-success hole where rank 0 passes and other ranks hang.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+Gate B holds on the pilot: a DCP checkpoint written by a **world size 2** run loads under **world size 1**
+with exact model integrity *and* exact optimizer-moment integrity, verified against a reference and
+broadcast so all ranks share the verdict. Genuinely sharded FSDP2 resharding is designed-for and deferred
+to the scale tier.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```python
+from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict
+msd, osd = get_state_dict(m, opt)
+dcp.save({"model": msd, "optim": osd}, checkpoint_id=CKPT)     # write under world size W1
+# ... later, under a DIFFERENT world size W2:
+dcp.load({"model": msd, "optim": osd}, checkpoint_id=CKPT)     # runtime redistributes shards
+set_state_dict(m, opt, model_state_dict=msd, optim_state_dict=osd)
+```
+</Versioned>
+
+**Where this goes.** The model now shards and reshards correctly. The last Part-4 chapter zooms out to
+the fabric all this communication runs on — the collective operations and the topology that decide
+whether the parallelism plan is fast or merely correct.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2304.11277", label: "Zhao et al., PyTorch FSDP — fully sharded data parallel" },
+  { tier: "T1", url: "https://arxiv.org/abs/1910.02054", label: "Rajbhandari et al., ZeRO — the sharded-state memory optimizations FSDP implements" },
+  { tier: "T2", url: "https://pytorch.org/docs/stable/distributed.checkpoint.html", label: "PyTorch Distributed Checkpoint — world-size-agnostic save/load" },
+]} />

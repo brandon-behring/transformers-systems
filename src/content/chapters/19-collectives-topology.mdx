@@ -1,0 +1,89 @@
+---
+title: "Collectives, Topology, and Feeding the GPUs"
+part: 4
+chapter: 20
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [collectives, topology, all-reduce, data-loading, scaling]
+concept_ids: [collective-ops, all-reduce, network-topology, input-pipeline]
+description: "The communication substrate parallelism runs on: the handful of collective operations, the ring/tree algorithms that make all-reduce bandwidth-optimal, the topology that decides where each collective can live, and the input pipeline that keeps the accelerators fed."
+scenario_ids: [r1-tiny-train]
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T2", url: "https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html", label: "NVIDIA — NCCL Collective Communication" }
+  - { tier: "T1", url: "https://arxiv.org/abs/1909.08053", label: "Shoeybi et al. — Megatron-LM (communication placement)" }
+  - { tier: "T3", url: "https://horace.io/brrr_intro.html", label: "Horace He — Making Deep Learning Go Brrr (overhead / feeding the GPU)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Collectives, Topology, and Feeding the GPUs
+
+**Where we are.** Every rung of the [parallelism ladder](/transformers-systems/chapters/17-parallelism-ladder/)
+communicated *something*. This chapter is the substrate underneath those communications: the collective
+operations themselves, the algorithms that make them bandwidth-optimal, the topology that decides where
+each can live, and — easily forgotten — the input pipeline that must keep the accelerators fed for any of
+it to matter.
+
+## 1. A small alphabet of collectives
+
+<Invariant note="the collective operations">
+Distributed training is built from a handful of collectives: **all-reduce** (every rank ends with the
+sum of all ranks' tensors — DP's gradient sync), **all-gather** (every rank collects all shards — FSDP's
+parameter gather), **reduce-scatter** (sum then partition — FSDP's gradient step), **broadcast** (one
+rank's value to all — the Gate B verdict), and **all-to-all** (each rank sends a distinct piece to each
+other — MoE's token routing). Every parallelism axis is one or two of these on a particular tensor at a
+particular frequency.
+</Invariant>
+
+Naming the collective a workload uses is the first step to costing it: an all-reduce of the gradients is
+DP's whole communication budget, and an all-to-all of tokens is EP's.
+
+## 2. Bandwidth-optimal collectives and the topology
+
+<Invariant note="ring algorithms and communication placement">
+A naïve all-reduce that sends every tensor to one rank is bottlenecked by that rank's link. The
+**ring all-reduce** instead passes shards around a ring so every link carries an equal share, making the
+cost independent of the number of ranks and bounded by the slowest link's bandwidth. This is why
+*topology* governs placement: a collective's cost is set by the slowest link it crosses, so the
+**highest-frequency** communication must be mapped to the **fastest** links — tensor-parallel all-reduces
+on intra-node interconnect, data-parallel all-reduces tolerated on the slower inter-node fabric.
+</Invariant>
+
+This is the composition rule from the ladder, made quantitative: the mesh's assignment of axes to network
+levels is chosen so that frequency and bandwidth are inversely matched. Get it backwards — a per-layer
+collective on a slow link — and the accelerators starve waiting on the network.
+
+## 3. Feeding the GPUs
+
+<Invariant note="the input pipeline is part of the system">
+An accelerator that waits on data is as idle as one that waits on the network. The input pipeline —
+reading, decoding, and collating the next batch — must run *ahead* of compute (prefetching, overlapped
+with the step) or it becomes the bottleneck, and the profiler shows the GPU idle between steps: the
+overhead roof of Part 0. At scale the data path is a distributed system of its own, and "feeding the
+GPUs" is a first-class throughput concern, not plumbing.
+</Invariant>
+
+The pilot's packed, pre-tokenized `uint16` batches from R0 exist precisely so the input path is trivial
+and cannot bottleneck the measurement — a deliberate simplification that a production data pipeline
+(streaming, sharded, decoded on the fly) must earn back.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+On Tier-0 the collectives run over **gloo** on a single device, so they exercise the *correctness* of the
+communication (broadcast verdict, sharded save/load) rather than fabric bandwidth. R0's fixed pre-packed
+batches keep the input pipeline out of the critical path, so the measured tok/s reflects compute, not data
+starvation — real ring-collective bandwidth and topology-aware placement are scale-tier work.
+</Renewable>
+
+**Where this goes.** Part 4 is complete: the model fits (memory wall), splits (parallelism ladder),
+reshards (FSDP + Gate B), and communicates (this chapter). Part 5 turns from training to *serving* — the
+same model under the very different economics of one token at a time.
+
+<SourceList sources={[
+  { tier: "T2", url: "https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html", label: "NVIDIA NCCL — collective operations and ring/tree algorithms" },
+  { tier: "T1", url: "https://arxiv.org/abs/1909.08053", label: "Shoeybi et al., Megatron-LM — placing collectives on the interconnect hierarchy" },
+  { tier: "T3", url: "https://horace.io/brrr_intro.html", label: "Horace He — keeping the accelerator fed (the overhead roof)" },
+]} />

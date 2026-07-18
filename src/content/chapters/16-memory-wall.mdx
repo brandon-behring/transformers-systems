@@ -1,0 +1,79 @@
+---
+title: "The Memory Wall and Activation Checkpointing"
+part: 4
+chapter: 17
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [memory, activations, checkpointing, scaling, recompute]
+concept_ids: [memory-wall, activation-memory, gradient-checkpointing, recompute-tradeoff]
+description: "Why training memory, not compute, is the first wall you hit at scale — and the compute-for-memory trade of activation checkpointing that buys the room to grow."
+scenario_ids: [r1-tiny-train]
+code_path: "fixtures/r1_tiny.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/1604.06174", label: "Chen et al. — Training Deep Nets with Sublinear Memory Cost (2016)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2205.05198", label: "Korthikanti et al. — Reducing Activation Recomputation in Large Transformer Models (2022)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Memory Wall and Activation Checkpointing
+
+**Where we are.** Part 3 trained R1 on one device. Part 4 scales it out — and the reason we *must* is
+almost always memory, not compute. This chapter names the wall and introduces the one technique that
+moves it without buying hardware: trading compute to recompute activations instead of storing them.
+
+## 1. The memory wall
+
+<Invariant note="three claims on device memory, in fixed proportions">
+Training memory has three tenants. **Model state** — weights, gradients, optimizer moments — is fixed by
+the parameter count (Part 0's $16$ bytes/parameter) and independent of batch. **Activations** — the
+intermediate tensors the backward pass needs — scale with $\text{batch}\times\text{sequence}\times
+\text{layers}\times d_\text{model}$ and are the *variable* tenant. **Fragmentation and workspace** take
+the rest. At scale, activations dominate and grow with the very knobs (batch, context) you want to
+increase — so memory, not FLOP/s, is the first wall.
+</Invariant>
+
+The wall is why R1-tiny is *tiny*: its fixed model state is 101 MB, but its activations at the training
+batch are several times that, and the sum must fit 8 GB. Growing the model or the context first exhausts
+memory, not compute — the opposite of the intuition that "a bigger GPU is a faster GPU."
+
+## 2. Activation checkpointing: recompute instead of store
+
+<Invariant note="the compute-for-memory trade">
+Activation (gradient) checkpointing stores only a subset of activations on the forward pass — typically
+one tensor per layer boundary — and *recomputes* the rest during the backward pass from those saved
+points. It trades a second forward pass (extra compute) for a large cut in activation memory. In the
+common per-layer scheme, memory drops from proportional to the number of layers toward proportional to
+its square root, at the cost of roughly one extra forward. The knob is *which* activations to keep;
+selective schemes recompute only the cheap-to-recompute, memory-heavy ones.
+</Invariant>
+
+This is a direct application of the roofline's logic: if a workload is memory-bound and compute-idle,
+spending idle compute to buy memory is free real estate. Korthikanti's selective recomputation is the
+refined form — cutting most activation memory while adding well under a full extra forward.
+
+## 3. When recompute runs out: shard
+
+Activation checkpointing buys headroom on *one* device; it does not let a model whose *weights* exceed
+one device fit. When the model state itself is too large — or when even checkpointed activations plus
+state overflow — the only remaining move is to split the model across devices. That is the parallelism
+ladder of the next chapter, and activation checkpointing composes with every rung of it.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+R1-tiny's fixture makes the proportions explicit: fixed model state $\approx 101$ MB, but the rough
+activation estimate at the training batch is $\approx 403$ MB — activations are the larger, batch-driven
+tenant, and the sum is what the 8 GB budget must hold. This is the memory wall in miniature: the pilot is
+sized so state + activations fit, and any growth hits memory first.
+</Renewable>
+
+**Where this goes.** When one device is not enough, the model is split across many. The next chapter is
+the taxonomy of *how* — the five axes of parallelism and what each one costs in communication.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/1604.06174", label: "Chen et al. — sublinear-memory training via activation recomputation" },
+  { tier: "T1", url: "https://arxiv.org/abs/2205.05198", label: "Korthikanti et al. — selective activation recomputation" },
+]} />

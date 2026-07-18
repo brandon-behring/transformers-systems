@@ -1,0 +1,88 @@
+---
+title: "The Parallelism Ladder: DP, TP, PP, CP, EP"
+part: 4
+chapter: 18
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [parallelism, data-parallel, tensor-parallel, pipeline, scaling]
+concept_ids: [data-parallelism, tensor-parallelism, pipeline-parallelism, context-parallelism, expert-parallelism]
+description: "Five orthogonal axes for splitting a model across devices — what each one partitions, what it communicates, and how they compose into the multi-dimensional mesh a large training run runs on."
+scenario_ids: [r1-tiny-train]
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/1909.08053", label: "Shoeybi et al. — Megatron-LM: Tensor-Parallel Training (2019)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/1811.06965", label: "Huang et al. — GPipe: Pipeline Parallelism (2018)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/1910.02054", label: "Rajbhandari et al. — ZeRO: Memory Optimizations (2019)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2310.01889", label: "Liu et al. — Ring Attention / context parallelism (2023)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Parallelism Ladder: DP, TP, PP, CP, EP
+
+**Where we are.** The [memory wall](/transformers-systems/chapters/16-memory-wall/) forced us off one
+device. This chapter is the taxonomy of splitting: five orthogonal axes, each partitioning a *different*
+dimension of the computation and paying a *different* communication cost. Understanding which axis solves
+which problem is what turns "add more GPUs" into a plan.
+
+## 1. Five axes, five things partitioned
+
+<Invariant note="the parallelism axes">
+Each axis splits a different dimension:
+- **Data parallelism (DP)** replicates the model and splits the *batch*; it communicates gradients
+  (an all-reduce) once per step. Sharded DP (ZeRO/FSDP) additionally splits the *model state* across the
+  replicas to cut memory, communicating parameters on demand.
+- **Tensor parallelism (TP)** splits individual *matrix multiplications* across devices; it communicates
+  *within* each layer (an all-reduce per attention/MLP block), so it demands the fastest links.
+- **Pipeline parallelism (PP)** splits the *layer stack* into stages on different devices; it communicates
+  only activations at stage boundaries, but introduces a pipeline *bubble* that micro-batching hides.
+- **Context parallelism (CP)** splits the *sequence* across devices for long contexts; it communicates
+  keys/values across the sequence shards (a ring exchange).
+- **Expert parallelism (EP)** splits *MoE experts* across devices; it communicates tokens to their chosen
+  experts (an all-to-all).
+These are orthogonal: a real run composes several into a multi-dimensional device mesh.
+</Invariant>
+
+The organizing question for each axis is *what does it communicate, and how often*. DP communicates
+gradients once per step; TP communicates activations several times per layer. That frequency, against the
+link bandwidth, is what decides where each axis can live.
+
+## 2. Which axis for which problem
+
+<Invariant note="matching the axis to the bottleneck">
+The axes solve different bottlenecks, so the choice is diagnostic, not aesthetic. Model *state* too big
+for one device → shard it (FSDP/ZeRO). A single *layer* too big → tensor-parallelize it. *Many* layers,
+limited fast links → pipeline them. *Sequence* too long to fit → context-parallelize. *Experts* too many
+→ expert-parallelize. Throughput too low but everything fits → data-parallelize for more batch. Reaching
+for the wrong axis (e.g. TP across a slow network) converts a memory problem into a communication
+problem.
+</Invariant>
+
+## 3. Composition and the communication hierarchy
+
+Because the axes are orthogonal, they compose into a mesh — e.g. TP within a node (fast intra-node
+links), PP across nodes, DP across the whole cluster. The guiding rule is to place the
+*highest-frequency* communication on the *fastest* links: TP's per-layer all-reduces belong on
+intra-node interconnect, DP's once-per-step all-reduce can tolerate the slower inter-node fabric. This
+mapping of communication frequency to network topology is the subject of the collectives chapter.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+Tier-0 is a single GPU, so the pilot exercises the *sharded-data-parallel* rung in a world-size-agnostic
+form (FSDP2 + Distributed Checkpoint, next chapter) with the model replicated across gloo ranks; genuine
+multi-device tensor/pipeline/expert parallelism and their collectives are a scale-tier extension the
+guide designs for but does not benchmark on 8 GB.
+</Renewable>
+
+**Where this goes.** The rung the pilot *can* prove is sharded data parallelism. The next chapter builds
+it with FSDP2 and pins the hardest correctness property it has: that a checkpoint saved under one device
+count restores under another.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/1909.08053", label: "Shoeybi et al., Megatron-LM — tensor parallelism" },
+  { tier: "T1", url: "https://arxiv.org/abs/1811.06965", label: "Huang et al., GPipe — pipeline parallelism and the bubble" },
+  { tier: "T1", url: "https://arxiv.org/abs/1910.02054", label: "Rajbhandari et al., ZeRO — sharded model state" },
+  { tier: "T1", url: "https://arxiv.org/abs/2310.01889", label: "Liu et al., Ring Attention — context parallelism" },
+]} />
