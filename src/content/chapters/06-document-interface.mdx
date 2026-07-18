@@ -1,0 +1,103 @@
+---
+title: "The Document-AI Interface: One Tokenizer, Two Modalities"
+part: 1
+chapter: 7
+last_verified: 2026-07-17
+freshness: literature-survey
+volatility: feature-surface
+tags: [document-ai, layout, structured-output, r0, r3]
+concept_ids: [doc-control-vocab, structured-markup, coordinate-tokens, layout-as-tokens, docai-benchmarks]
+description: "How a page's structure becomes a token sequence the same decoder can produce: coordinate tokens, structural tags, and the reserved document-control vocabulary that lets one tokenizer serve both the text model and the document-AI model."
+scenario_ids: [r1-tiny-train]
+code_path: "vlm/spike.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2111.15664", label: "Kim et al. — Donut: OCR-free Document Understanding Transformer (2022)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2308.13418", label: "Blecher et al. — Nougat: Neural Optical Understanding for Academic Documents (2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2109.10852", label: "Chen et al. — Pix2Seq: A Language Modeling Framework for Object Detection (2021)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2210.03347", label: "Lee et al. — Pix2Struct: Screenshot Parsing as Pretraining (2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2305.08455", label: "Van Landeghem et al. — DUDE: Document Understanding Dataset and Evaluation (2023)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Document-AI Interface: One Tokenizer, Two Modalities
+
+**Where we are.** The [tokenizer](/transformers-systems/chapters/05-tokenization/) reserved eight
+document-structure tokens it never used on text. This chapter is why they exist. The document-AI model
+R3 — the guide's north star — reads a page image and *writes structured markup*, and the decisive
+design choice is that it writes it with the **same tokenizer and the same decoder** as the text model.
+This chapter defines that interface; the systems that build and serve it are Part 7.
+
+## 1. Structured output is a token sequence
+
+<Invariant note="layout as a sequence-modeling problem">
+A document's structure — its regions, tables, formulas, reading order — is a *tree*, but a decoder
+emits a *sequence*. The interface that unifies them is to serialize the tree into tokens: structural
+tags open and close nodes (`<table><tr><td>…</td></tr></table>`), and geometry, where needed, is
+emitted as **coordinate tokens** — real-valued positions quantized into vocabulary entries. Under this
+framing, "understand this page" and "predict the next token" are the *same* operation, so document
+understanding needs no separate detection head — only the reserved vocabulary and the decoder we
+already have.
+</Invariant>
+
+This is the lineage the public literature established: **Pix2Seq** cast object detection as
+next-token prediction over quantized coordinates; **Donut** and **Pix2Struct** made document parsing
+OCR-free by predicting structured strings directly from pixels; **Nougat** predicted a full markup
+document (headings, tables, math) from an academic page. R3 stands on this analogue — layout emitted
+as tokens, never as a bespoke non-sequence output — which is precisely why one decoder suffices.
+
+## 2. The document-control vocabulary is the seam
+
+<Invariant note="a shared namespace binds the two models">
+Because the structural tags live in the *same* tokenizer as the text tokens, the boundary between the
+text model and the document model is a **vocabulary partition**, not a model boundary. The text model
+R1 exercises the language tokens; the document model R3 exercises those *plus* the reserved
+`<page> <region> <table> <tr> <td> <formula>` tags. Sharing the namespace means R3 inherits R1's
+learned text distribution for free and adds only the ability to place structure around it.
+</Invariant>
+
+Concretely, a document target is a token stream that interleaves content and structure — a `<page>`
+opens, `<region>`s and `<table>`s bracket their content, `<formula>` marks math, `<eos_doc>`
+terminates. The tree is reconstructed downstream by matching opens to closes and by containment; the
+decoder's job is only to emit the sequence. This "layout ≠ text, but both are tokens" separation is
+what lets the pilot overfit a single document end-to-end before any of the Part-7 machinery exists:
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The VLM interface spike drives an image through a small vision encoder and projector into the R1-tiny
+decoder and trains it to emit a fixed document's exact markup token sequence — overfitting one page to
+validate the interface (shared tokenizer, structural tags, `<eos_doc>` termination) before scaling.
+It confirms the seam holds: the decoder emits the reserved document tokens with no architectural
+change beyond the input projection.
+</Renewable>
+
+## 3. What "done" means: tasks and benchmarks
+
+An interface is only as real as the tasks it is scored on. The public document-AI benchmarks fix the
+targets: **FUNSD** and **CORD** for form and receipt structure, **DocVQA** and **DUDE** for
+document question answering, and long-context suites for multi-page reasoning. They matter here for a
+methodological reason from Part 0: they define the *denominators* and the *quality target* against
+which R3's time-to-quality is measured, so "the document model works" becomes a number, not an
+impression.
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```python
+# A document target is just tokens from the shared vocabulary:
+target = "<page><region>Invoice<table><tr><td>Total<td>$42</tr></table></region><eos_doc>"
+ids = tok.encode(target).ids     # same tokenizer as the text model — no re-tokenization
+```
+</Versioned>
+
+**Where this goes.** R0 is now complete: a licensed corpus, a rebuildable tokenizer, and a document
+interface that shares both. The last Part-1 chapter turns tokens into the fixed-shape batches training
+consumes, closing the data contract.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2109.10852", label: "Chen et al., Pix2Seq — detection as next-token prediction over quantized coordinates" },
+  { tier: "T1", url: "https://arxiv.org/abs/2111.15664", label: "Kim et al., Donut — OCR-free document parsing to structured strings" },
+  { tier: "T1", url: "https://arxiv.org/abs/2308.13418", label: "Blecher et al., Nougat — predicting document markup from academic pages" },
+  { tier: "T1", url: "https://arxiv.org/abs/2210.03347", label: "Lee et al., Pix2Struct — screenshot parsing as pretraining" },
+  { tier: "T1", url: "https://arxiv.org/abs/2305.08455", label: "Van Landeghem et al., DUDE — document understanding evaluation" },
+]} />

@@ -1,0 +1,93 @@
+---
+title: "The Corpus: Acquisition, Licensing, and an Immutable Provenance"
+part: 1
+chapter: 5
+last_verified: 2026-07-17
+freshness: reference
+volatility: feature-surface
+tags: [data, corpus, licensing, provenance, r0]
+concept_ids: [corpus-contract, data-licensing, corpus-normalization, corpus-manifest]
+description: "A training corpus is not a folder of text but a contract: a pinned source with a license, an explicit normalization, and a checksum that makes it reproducible — worked on R0's FineWeb-Edu slice."
+scenario_ids: [r1-tiny-train]
+code_path: "r0/build_r0.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2406.17557", label: "Penedo et al. — The FineWeb Datasets (2024)" }
+  - { tier: "T2", url: "https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu", label: "FineWeb-Edu dataset card (ODC-By-1.0)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2107.06499", label: "Lee et al. — Deduplicating Training Data Makes Language Models Better (2021)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Corpus: Acquisition, Licensing, and an Immutable Provenance
+
+**Where we are.** Part 0 gave us the discipline for numbers. Part 1 builds the thing those numbers
+describe: **R0**, the data-and-interface contract every later model consumes. It begins with the
+corpus — and the first lesson of production data work is that a corpus is not a pile of text you
+happen to have, but a *contract* you can restate, license, and re-derive byte-for-byte.
+
+## 1. A corpus is a contract
+
+<Invariant note="the five clauses of a corpus contract">
+A reproducible corpus fixes: (i) a **source** with a pinned revision (which dataset, which split,
+how many documents); (ii) a **license** that permits your use and redistribution of derived
+artifacts; (iii) a **normalization** — the exact text transformation applied, stated, not assumed;
+(iv) **splits** with no leakage between train and eval; and (v) an **immutable identifier** — a
+checksum over the assembled bytes — so "the corpus" names one specific artifact forever. Drop any
+clause and "trained on FineWeb" stops being a claim anyone can check.
+</Invariant>
+
+The license clause is the one engineers most often skip and lawyers most reliably catch. R0 draws
+from **FineWeb-Edu** (the education-filtered subset of FineWeb), released under **ODC-By-1.0** — an
+attribution license that permits derived works. Recording the license *in the manifest*, next to the
+bytes, means a downstream user of R1 or R3 inherits the provenance rather than having to reconstruct
+it.
+
+## 2. Normalization is a decision, not a default
+
+R0's normalization is deliberately minimal and explicitly stated: strip surrounding whitespace,
+replace intra-document newlines with spaces (so one line is one document), and rely on UTF-8 to carry
+an implicit NFC form. Minimal is a choice with consequences — aggressive normalization (lowercasing,
+Unicode folding, punctuation stripping) discards signal a byte-level tokenizer could have used, while
+*no* normalization lets encoding noise masquerade as vocabulary. The point is not which policy is
+best but that the policy is **written down and checksummed**, so two runs of the pipeline cannot
+silently disagree on what "the text" was.
+
+Deduplication belongs to this clause too: near-duplicate documents inflate apparent data and let a
+model memorize instead of generalize. FineWeb-Edu is deduplicated upstream, so R0 inherits it; a
+corpus built from raw crawl would have to dedup explicitly and record that it did.
+
+## 3. Immutability by checksum
+
+R0's build script assembles the corpus, then hashes it — and hashes the tokenizer and the batches
+derived from it — into `r0/manifest.yml`. The manifest is the corpus's identity: change one document
+and the SHA-256 changes, and every artifact pinned to the old hash is now provably stale. This is the
+[numbers contract](/transformers-systems/chapters/03-numbers-contract/) applied to data instead of to
+FLOPs.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+R0 assembles **8,000 FineWeb-Edu documents** (config `sample-10BT`, ODC-By-1.0) and records
+`corpus_sha256`, the byte count, the normalization string, and the license in `r0/manifest.yml`. If
+FineWeb-Edu is unreachable the script falls back to a pinned public-domain text and records *that* in
+the manifest — the pipeline never silently substitutes data without leaving a trace.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```bash
+python r0/build_r0.py
+# [r0] corpus docs=8000 (HuggingFaceFW/fineweb-edu)  vocab=8192  batches=(256, 512)
+# [r0] shas: corpus=… tok=… batches=…   → written to r0/manifest.yml
+```
+</Versioned>
+
+**Where this goes.** The corpus is the raw material; the next chapter turns it into tokens with a
+byte-level BPE tokenizer whose vocabulary we can rebuild and whose special tokens reserve room for the
+document-AI interface.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2406.17557", label: "Penedo et al., The FineWeb Datasets (2024) — the FineWeb / FineWeb-Edu construction and filtering" },
+  { tier: "T2", url: "https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu", label: "FineWeb-Edu dataset card — ODC-By-1.0 license and sample configs" },
+  { tier: "T1", url: "https://arxiv.org/abs/2107.06499", label: "Lee et al., Deduplicating Training Data Makes Language Models Better (2021)" },
+]} />

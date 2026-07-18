@@ -1,0 +1,90 @@
+---
+title: "The Data Pipeline: Packing, Batching, and Immutability"
+part: 1
+chapter: 8
+last_verified: 2026-07-17
+freshness: reference
+volatility: stable-principle
+tags: [data-pipeline, packing, batching, provenance, r0]
+concept_ids: [sequence-packing, fixed-shape-batches, data-immutability, token-dtype]
+description: "Turning a token stream into the fixed-shape, checksummed batches training consumes: sequence packing with document separators, a dtype chosen to fit the vocabulary, and a manifest that makes the whole pipeline immutable."
+scenario_ids: [r1-tiny-train]
+code_path: "r0/build_r0.py"
+tests_path: "tests/test_r1_tiny_fixture.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2107.02027", label: "Kosec et al. — Packing: Towards 2x NLP BERT Acceleration (sequence packing, 2021)" }
+  - { tier: "T2", url: "https://github.com/huggingface/tokenizers", label: "Hugging Face tokenizers — encoding used to build the batches" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Data Pipeline: Packing, Batching, and Immutability
+
+**Where we are.** We have a licensed corpus and a tokenizer that reserves document structure. The last
+step of the R0 contract is the one training actually reads: **fixed-shape batches of token ids**. This
+chapter turns a ragged stream of documents into a rectangular array, and — as with every R0 artifact —
+checksums it so the training input is immutable.
+
+## 1. Packing: from ragged documents to a rectangle
+
+<Invariant note="sequence packing, stated exactly">
+Documents have unequal lengths; a training batch must be a rectangle of shape (sequences × context).
+**Packing** bridges the two: concatenate encoded documents into one long token stream, insert a
+separator (`<|endoftext|>`) at each document boundary, then slice the stream into fixed-length rows.
+Packing wastes no tokens on padding — every position carries signal — at the cost of one subtlety: a
+row can span a document boundary, so the separator token is what tells the model where one document
+ends and the next begins.
+</Invariant>
+
+Padding-based batching, the alternative, pads every sequence to the longest in the batch and wastes
+compute proportional to the length variance. For a corpus of short, varied documents that waste is
+large, which is why packing is standard for pretraining. The separator is not cosmetic: without it the
+model would learn spurious continuations across unrelated documents.
+
+## 2. The dtype is a function of the vocabulary
+
+A token id is an integer, and the integer width is a decision with a memory cost. R0's vocabulary is
+**8,192**, which fits in 16 bits, so the batch array is stored as `uint16` — half the footprint of the
+`int32` a naïve pipeline would use. The rule is exact: any vocabulary below $2^{16}=65{,}536$ fits in
+`uint16`; cross that threshold and the dtype must widen. Choosing the narrowest dtype that holds the
+vocabulary is the same byte-discipline the [memory ledger](/transformers-systems/chapters/01-resource-accounting/)
+applied to weights, now applied to data.
+
+## 3. The whole pipeline is one immutable artifact
+
+<Invariant note="reproducibility is transitive through checksums">
+The batches are a deterministic function of the corpus and the tokenizer, each of which is itself
+checksummed. Recording all three hashes — corpus, tokenizer, batches — in one manifest makes
+reproducibility transitive: given the manifest, anyone can re-run the pipeline and verify they
+obtained the identical training input, bit for bit. A model's claims are only as reproducible as the
+data artifact they were trained on, and here that artifact has a single immutable name.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+R0 packs the tokenized corpus into a **(256 × 512)** `uint16` array — 256 sequences of context length
+512 — and records `batches_sha256` alongside the corpus and tokenizer hashes in `r0/manifest.yml`. The
+golden fixture test asserts the shape and dtype, so a pipeline change that alters the training input
+trips CI rather than silently retraining on different data.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```python
+ids = []
+for line in corpus:
+    ids.extend(tok.encode(line).ids)
+    ids.append(eot)                       # <|endoftext|> separates documents
+arr = np.array(ids[:256 * 512], dtype=np.uint16).reshape(256, 512)   # packed, no padding
+```
+</Versioned>
+
+**Where this goes.** R0 — the corpus, the tokenizer, the document interface, and these batches — is now
+a complete, checksummed contract. Part 2 uses it to *decide* the model: how scaling laws turn a compute
+budget into R1-tiny's shape, and how the reference-model family branches from there.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2107.02027", label: "Kosec et al., Packing: Towards 2x NLP BERT Acceleration — sequence packing without padding waste" },
+  { tier: "T2", url: "https://github.com/huggingface/tokenizers", label: "Hugging Face tokenizers — the encoding step feeding the packer" },
+]} />

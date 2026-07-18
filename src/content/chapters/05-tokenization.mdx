@@ -1,0 +1,99 @@
+---
+title: "Tokenization: A Byte-Level BPE You Can Rebuild"
+part: 1
+chapter: 6
+last_verified: 2026-07-17
+freshness: reference
+volatility: stable-principle
+tags: [tokenization, bpe, vocabulary, r0]
+concept_ids: [byte-level-bpe, vocab-budget, special-tokens, tokenizer-determinism]
+description: "Byte-level BPE as a rebuildable artifact: a 256-byte alphabet with no UNK, a vocabulary that is a budget to be spent, and reserved special tokens that make one tokenizer serve both text and documents."
+scenario_ids: [r1-tiny-train]
+code_path: "r0/build_r0.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/1508.07909", label: "Sennrich et al. — Neural Machine Translation of Rare Words with Subword Units (BPE, 2016)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2101.00027", label: "GPT-2 / byte-level BPE lineage (language models as unsupervised multitask learners)" }
+  - { tier: "T2", url: "https://github.com/huggingface/tokenizers", label: "Hugging Face tokenizers — the BPE trainer used by R0" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Tokenization: A Byte-Level BPE You Can Rebuild
+
+**Where we are.** The [corpus](/transformers-systems/chapters/04-corpus/) is text; the model consumes
+integers. The tokenizer is the map between them, and in R0 it is a *rebuildable artifact* — trained by
+a script, checksummed into the manifest, and shared between the text model and the document-AI model.
+This chapter builds it from the byte up.
+
+## 1. BPE over bytes
+
+<Invariant note="byte-level BPE, stated exactly">
+Byte-Pair Encoding starts from an alphabet and greedily merges the most frequent adjacent pair into a
+new symbol, repeating until the vocabulary reaches a target size. Taking the alphabet to be the
+**256 possible bytes** makes the tokenizer *total*: every possible input encodes without an
+out-of-vocabulary token, because every string is a sequence of bytes. There is no UNK, no
+normalization surprise, and no language the tokenizer cannot represent — only more or fewer merges
+spent on it.
+</Invariant>
+
+The consequence is robustness: emoji, code, non-Latin scripts, and corrupted bytes all round-trip.
+The cost is that rare content is spent one byte at a time, which is exactly the trade the *vocabulary
+budget* manages.
+
+## 2. The vocabulary is a budget
+
+A vocabulary size is not a free parameter to maximize; it is a budget to allocate. R0 fixes it at
+**8,192**, and that number is spent in three places: the 256 base bytes (unconditional), the reserved
+special tokens (below), and the remaining merges that buy shorter sequences for common text. A larger
+vocabulary shortens sequences (fewer tokens per document, so cheaper attention) but enlarges the
+embedding table — recall from the [parameter ledger](/transformers-systems/chapters/01-resource-accounting/)
+that R0's tied embedding is $V d_\text{model}$, one third of R1-tiny at $V=8192$. Doubling the vocab
+would double that third. The budget is a direct dial between sequence length and parameter count.
+
+## 3. Special tokens reserve the future
+
+<Invariant note="special tokens are a namespace decision">
+Special tokens are vocabulary entries the trainer will never split or merge away — control symbols
+with fixed ids. Reserving them at training time is a namespace decision: a token added *after*
+training shifts no existing id, but a token the model never saw carries no learned meaning. So the
+tokenizer reserves, up front, both the sequence-control tokens (end-of-text, pad) **and** the
+document-structure tokens the document-AI model will later need.
+</Invariant>
+
+R0 reserves ten: `<|endoftext|>` and `<|pad|>` for sequences, and
+`<page> </page> <region> <table> <tr> <td> <formula> <eos_doc>` for document structure. The text model
+R1 will only ever emit the first two — but because the document tokens share the *same* tokenizer and
+ids, the document model R3 needs no re-tokenization and no embedding surgery. One tokenizer, two
+modalities; the seam is the subject of the [next chapter](/transformers-systems/chapters/06-document-interface/).
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+R0 trains a byte-level BPE tokenizer to **vocab 8,192** on the pinned corpus with the ten special
+tokens reserved, and records its `tokenizer_sha256` in the manifest. Re-running the build on the same
+corpus reproduces the same tokenizer hash — the tokenizer is deterministic given its inputs.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```python
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers
+tok = Tokenizer(models.BPE(unk_token=None))          # no UNK — byte alphabet is total
+tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+tok.train([CORPUS], trainers.BpeTrainer(
+    vocab_size=8192,
+    special_tokens=["<|endoftext|>", "<|pad|>", "<page>", "</page>", "<region>",
+                    "<table>", "<tr>", "<td>", "<formula>", "<eos_doc>"],
+    initial_alphabet=pre_tokenizers.ByteLevel.alphabet()))   # all 256 bytes
+```
+</Versioned>
+
+**Where this goes.** With a tokenizer that reserves document structure, the next chapter defines the
+document-AI interface those reserved tokens encode — how a page's layout becomes a token sequence the
+same decoder can produce.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/1508.07909", label: "Sennrich et al., Neural Machine Translation of Rare Words with Subword Units — BPE" },
+  { tier: "T1", url: "https://arxiv.org/abs/2101.00027", label: "The byte-level BPE lineage (GPT-2-style total tokenizers over bytes)" },
+  { tier: "T2", url: "https://github.com/huggingface/tokenizers", label: "Hugging Face tokenizers — the ByteLevel BPE trainer R0 uses" },
+]} />
