@@ -19,6 +19,8 @@ jobs:
         run: npm run build
       - name: Governance gates
         run: |
-          node scripts/freshness-expiry.mjs   # I/R/V blocks within TTL
-          node scripts/version-matrix.mjs      # Versioned pins in supported matrix
-          node scripts/concept-registry.mjs    # concept-ID uniqueness + no dangling refs
+          node scripts/freshness-expiry.mjs      # I/R/V blocks within TTL
+          node scripts/version-matrix.mjs         # Versioned pins in supported matrix
+          node scripts/concept-registry.mjs       # concept-ID uniqueness + no dangling refs
+          node scripts/test-systems-schema.mjs    # systems frontmatter rejects malformed input
+          node scripts/crosslink-check.mjs        # formal:<id> refs resolve to the frozen contract

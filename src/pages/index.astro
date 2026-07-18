@@ -4,19 +4,23 @@ import { normalizeBase } from '@brandon_m_behring/book-scaffold-astro';
 
 const baseUrl = normalizeBase(import.meta.env.BASE_URL);
 ---
-<Base title="transformer-systems" description="A book scaffolded with @brandon_m_behring/create-book (research-portfolio profile).">
+<Base title="Transformer Systems Engineering" description="A code-first companion to the formal transformer-mathematics guide: scale one reference-model family from decide to serve, with every number traceable to a runnable fixture.">
   <article class="prose">
-    <h1>transformer-systems</h1>
+    <h1>Transformer Systems Engineering</h1>
     <p>
-      This is the landing page for your book. Edit it at
-      <code>src/pages/index.astro</code>.
+      A code-first, nuts-and-bolts companion to the formal
+      <em>Transformer Mathematics</em> guide. We take a single reference-model family
+      &mdash; a small dense language model and its document-AI variant &mdash; and scale
+      it along the buildable spine: <strong>decide &rarr; build &rarr; train &rarr; scale
+      &rarr; serve</strong>. Every performance claim is instrumented; every number traces
+      to a runnable fixture, and every source to a strict-live dossier.
     </p>
     <p>
-      Chapters live under <code>src/content/chapters/</code>. The auto-injected
-      routes are <a href={baseUrl + 'chapters/'}>/chapters</a>,
-      <a href={baseUrl + 'references/'}>/references</a>,
-      <a href={baseUrl + 'search/'}>/search</a>, and
-      <a href={baseUrl + 'print/'}>/print</a>.
+      Start with
+      <a href={baseUrl + 'chapters/'}>the chapters</a>, or jump to
+      <a href={baseUrl + 'references/'}>references</a>,
+      <a href={baseUrl + 'search/'}>search</a>, or the
+      <a href={baseUrl + 'print/'}>print edition</a>.
     </p>
   </article>
 </Base>
