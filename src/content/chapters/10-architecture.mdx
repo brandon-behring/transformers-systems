@@ -1,0 +1,128 @@
+---
+title: "The R1 Architecture: A Modern Decoder, Component by Component"
+part: 2
+chapter: 11
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [architecture, rmsnorm, rope, swiglu, gqa, r1]
+concept_ids: [rmsnorm, rope, swiglu, gqa, pre-norm-residual, tied-output]
+description: "The four modernizations that separate a 2024 decoder from a 2017 one — RMSNorm, rotary positions, the SwiGLU feed-forward, and grouped-query attention — each stated exactly and instantiated in R1-tiny's from-scratch module."
+scenario_ids: [r1-tiny-train]
+code_path: "model/r1.py"
+tests_path: "tests/test_r1_tiny_fixture.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/1910.07467", label: "Zhang & Sennrich — Root Mean Square Layer Normalization (2019)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2104.09864", label: "Su et al. — RoFormer: Rotary Position Embedding (2021)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2002.05202", label: "Shazeer — GLU Variants Improve Transformer (SwiGLU, 2020)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2305.13245", label: "Ainslie et al. — GQA: Grouped-Query Attention (2023)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The R1 Architecture: A Modern Decoder, Component by Component
+
+**Where we are.** Scaling laws fixed R1-tiny's *size*; this chapter fixes its *shape*. A modern decoder
+is the 2017 transformer with four specific substitutions, each of which buys either stability,
+generalization, or serving efficiency. We state each exactly and point at its line in the from-scratch
+module, so the [parameter ledger](/transformers-systems/chapters/01-resource-accounting/) and the code
+are the same object.
+
+## 1. Pre-norm residual blocks
+
+<Invariant note="normalize the input to each sublayer, not the output">
+A modern decoder places the normalization *inside* the residual branch, before each sublayer:
+$x \leftarrow x + \text{Attn}(\text{Norm}(x))$, then $x \leftarrow x + \text{FFN}(\text{Norm}(x))$.
+Pre-norm keeps a clean identity path from input to output, which is what lets deep stacks train without
+the learning-rate warmup gymnastics that post-norm requires. The residual stream is never normalized;
+only the sublayer inputs are.
+</Invariant>
+
+Every block is this pattern twice — an attention sublayer and a feed-forward sublayer, each guarded by
+its own norm — and R1-tiny stacks six of them.
+
+## 2. RMSNorm: normalization without the mean
+
+<Invariant note="RMSNorm">
+RMSNorm rescales an activation vector by its root-mean-square and a learned gain, *without* subtracting
+the mean:
+$$\text{RMSNorm}(x) = \frac{x}{\sqrt{\tfrac{1}{d}\sum_i x_i^2 + \varepsilon}} \odot g.$$
+Dropping the mean-centering and the bias of LayerNorm removes two operations per token and costs
+nothing measurable in quality. The learned gain $g$ is one scale per feature — the $2\,d_\text{model}$
+norm parameters per layer in the ledger.
+</Invariant>
+
+R1-tiny fixes $\varepsilon = 10^{-5}$.
+
+## 3. RoPE: position as a rotation
+
+<Invariant note="rotary position embedding">
+Rotary position embedding encodes absolute position by *rotating* each pair of query/key dimensions by
+an angle proportional to the position, using a fixed geometric spectrum of frequencies. Because a dot
+product between two rotated vectors depends only on the *difference* of their angles, attention scores
+become a function of *relative* position — with no learned position table and a natural path to
+extrapolating beyond the trained context. R1-tiny uses base $\theta = 10{,}000$.
+</Invariant>
+
+RoPE is applied to $q$ and $k$ *after* their projections and *before* the attention product, so it
+touches no parameters — it is pure geometry on the activations.
+
+## 4. SwiGLU: a gated feed-forward
+
+<Invariant note="the SwiGLU feed-forward">
+SwiGLU replaces the two-matrix MLP with a *gated* three-matrix block:
+$\text{FFN}(x) = W_\text{down}\big(\text{SiLU}(W_\text{gate}\,x) \odot (W_\text{up}\,x)\big)$.
+The elementwise product of a SiLU-activated gate with a linear projection is a data-dependent gate that
+outperforms a plain MLP at equal parameter count — at the cost of a third matrix, which is why the
+inner width is shrunk (to $\approx \tfrac{8}{3} d_\text{model}$) to keep the parameter budget matched.
+</Invariant>
+
+This is the ledger's $P_\text{ffn} = 3\,d_\text{model}\,d_\text{ff}$: three matrices, not two, and
+$d_\text{ff}=704$ chosen so the block matches a $4\times$ plain MLP in parameters.
+
+## 5. GQA: sharing keys and values across heads
+
+<Invariant note="grouped-query attention">
+Grouped-query attention keeps $n_\text{heads}$ query heads but only $n_\text{kv} < n_\text{heads}$
+key/value heads, each shared across a group of query heads. It shrinks the key/value projections and —
+decisively for serving — shrinks the **KV cache** that dominates decode memory by the factor
+$n_\text{heads}/n_\text{kv}$, at negligible quality cost. R1-tiny uses $8$ query heads and $2$ KV heads:
+a $4\times$ smaller KV cache than full multi-head attention.
+</Invariant>
+
+The choice made *here*, at architecture time, is what makes the Part-5 serving chapters cheap; GQA is a
+training-time decision paying an inference-time dividend.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+R1-tiny is implemented from scratch (`model/r1.py`) with exactly these four components — RMSNorm
+($\varepsilon=10^{-5}$), RoPE ($\theta=10{,}000$), SwiGLU ($d_\text{ff}=704$), GQA ($8$ query / $2$ KV
+heads) — and a tied output projection. Its parameter count matches the fixture's predicted
+$6{,}327{,}552$ to the parameter, and it overfits a small batch to near-zero loss, confirming the
+forward and backward paths are correct.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```python
+class SwiGLU(nn.Module):                     # three matrices: gate, up, down
+    def forward(self, x):
+        return self.down(F.silu(self.gate(x)) * self.up(x))
+
+# GQA: expand n_kv shared KV heads to n_heads groups, then fused causal attention
+k = self.k(x).view(b, s, self.n_kv, self.hd).transpose(1, 2)
+out = F.scaled_dot_product_attention(q, k_expanded, v_expanded, is_causal=True)
+logits = F.linear(self.norm(x), self.embed.weight)     # output tied to input embedding
+```
+</Versioned>
+
+**Where this goes.** Size (scaling laws) and shape (this chapter) fix R1. The last Part-2 chapter fixes
+the *served* views of it — the Q(·) deployment matrix — before Part 3 builds and trains the thing.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/1910.07467", label: "Zhang & Sennrich — RMSNorm" },
+  { tier: "T1", url: "https://arxiv.org/abs/2104.09864", label: "Su et al. — RoFormer / Rotary Position Embedding" },
+  { tier: "T1", url: "https://arxiv.org/abs/2002.05202", label: "Shazeer — GLU Variants (SwiGLU)" },
+  { tier: "T1", url: "https://arxiv.org/abs/2305.13245", label: "Ainslie et al. — Grouped-Query Attention" },
+]} />

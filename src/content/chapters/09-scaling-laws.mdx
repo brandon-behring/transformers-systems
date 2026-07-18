@@ -1,0 +1,99 @@
+---
+title: "Scaling Laws as a Design Instrument"
+part: 2
+chapter: 10
+last_verified: 2026-07-17
+freshness: theoretical
+volatility: architectural-pattern
+tags: [scaling-laws, compute-optimal, design, chinchilla]
+concept_ids: [scaling-law-fit, compute-optimal-allocation, chinchilla-ratio, inference-aware-scaling, budget-to-shape]
+description: "How a compute budget becomes a model shape: the separable loss fit, the compute-optimal allocation of parameters versus tokens, and why a deployment-aware objective — or an 8 GB card — deliberately departs from it."
+scenario_ids: [r1-tiny-train]
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2001.08361", label: "Kaplan et al. — Scaling Laws for Neural Language Models (2020)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2203.15556", label: "Hoffmann et al. — Training Compute-Optimal Large Language Models (Chinchilla, 2022)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2401.00448", label: "Sardana et al. — Beyond Chinchilla-Optimal: Accounting for Inference (2024)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Scaling Laws as a Design Instrument
+
+**Where we are.** The [family DAG](/transformers-systems/chapters/08-model-family/) fixed *which*
+models exist. This chapter is the instrument that sizes them. We use scaling laws not to forecast a
+benchmark but as an engineering tool: given a fixed compute budget, how many parameters and how many
+tokens minimize loss? The formal companion guide proves the allocation theorem; here we treat it as a
+design dial and read off what it says about the reference model. *(For the theorem's proof and its
+exact regularity conditions, see the formal guide's scaling-laws chapter.)*
+
+## 1. The loss surface has a separable shape
+
+<Invariant note="the separable scaling-law fit">
+Across a wide regime, pretraining loss as a function of parameters $N$ and training tokens $D$ fits a
+separable power law
+$$L(N, D) = E + \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}},$$
+where $E$ is the irreducible loss and the two additive terms are the finite-model and finite-data
+penalties. This is an *empirical fit*, not a law of nature: the coefficients depend on the tokenizer,
+the data mixture, the architecture, and the recipe, and it describes pretraining loss in a stated
+regime — not downstream-task behavior.
+</Invariant>
+
+The value of the fit is that it is *separable*: the parameter penalty and the data penalty add, so a
+compute budget spent on one trades against the other along a clean contour.
+
+## 2. From a budget to a shape
+
+Training compute is, to the dense-FLOP proxy of Part 0, $C \approx 6ND$. Minimizing $L$ on the contour
+$6ND = C$ gives the compute-optimal allocation:
+
+<Invariant note="compute-optimal allocation">
+$$N_\text{opt} \propto C^{\,\beta/(\alpha+\beta)}, \qquad D_\text{opt} \propto C^{\,\alpha/(\alpha+\beta)}.$$
+Parameters and tokens each grow as a power of the budget, with exponents set by the *ratio* of the
+fitted decay rates. When the two rates are equal ($\alpha=\beta$) both exponents collapse to $1/2$:
+optimal $N$ and $D$ each scale as $\sqrt{C}$, and the optimal token-to-parameter ratio is constant.
+Chinchilla's fit put that ratio near **20 tokens per parameter** — but the ratio is constant in $C$
+*only* under the equal-exponent symmetry; in general it drifts with the budget.
+</Invariant>
+
+This is the "$6ND$" rule's payoff: it converts a dollar figure (GPU-hours) into a target $(N, D)$
+before a single step runs. It is also where the proxy's honesty matters — $6ND$ is a *dense-training
+FLOP proxy*, not wall-clock; utilization, memory traffic, and the attention term (Part 0 §2) still need
+separate accounting when the budget is a real cluster and a real clock.
+
+## 3. When you should *not* be compute-optimal
+
+<Invariant note="the training-only optimum is not the lifecycle optimum">
+Compute-optimal allocation minimizes *training* loss per training FLOP. It ignores inference. A model
+that will serve many tokens has a lifecycle cost dominated by *serving*, and there a smaller model
+trained on more tokens than Chinchilla prescribes — deliberately "over-trained" — can be rational:
+you pay more training compute once to buy a cheaper model forever. Inference-aware scaling makes this
+trade explicit. Over-training here means *more tokens at fixed model size than the training-only rule
+selects*, not training past convergence.
+</Invariant>
+
+R1-tiny departs from compute-optimal for a blunter reason, and naming it is the point of this chapter:
+its shape is set by a **hardware constraint**, not a scaling optimum. At $6.3\text{M}$ parameters it is
+far smaller than any compute-optimal target, because the binding constraint is that its training state
+plus activations must fit an 8 GB card (the [memory ledger](/transformers-systems/chapters/01-resource-accounting/)).
+Scaling laws are still the instrument — they tell us *exactly how far* R1-tiny sits from optimal, and in
+which direction a production sibling would move.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+R1-tiny is a deliberately **under-parameterized pilot**: sized by the Tier-0 memory budget, not by a
+compute-optimal fit. The training run's loss descends monotonically ($9.07 \to 6.26$) — the model is
+learning, but it is nowhere near the data-saturated regime a compute-optimal model targets, exactly as
+the ledger predicts for its size.
+</Renewable>
+
+**Where this goes.** Scaling laws fixed the *size*; the next chapter fixes the *shape at the layer
+level* — the specific normalization, positional encoding, activation, and attention grouping that make
+R1 a modern decoder rather than a 2017 one.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2001.08361", label: "Kaplan et al. — power-law scaling across model size, data, and compute" },
+  { tier: "T1", url: "https://arxiv.org/abs/2203.15556", label: "Hoffmann et al. — Chinchilla: the compute-optimal allocation and ~20 tokens/param fit" },
+  { tier: "T1", url: "https://arxiv.org/abs/2401.00448", label: "Sardana et al. — inference-aware scaling favors smaller, longer-trained models" },
+]} />

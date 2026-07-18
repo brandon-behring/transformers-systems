@@ -1,0 +1,98 @@
+---
+title: "Q(·): The Deployment Matrix as a Scenario, Not a Second Model"
+part: 2
+chapter: 12
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [deployment, quantization, precision, slo, serving]
+concept_ids: [deployment-matrix, component-precision, calibration-quality-budget, serving-slo]
+description: "A deployment is a projection over a trained model: which components run at which precision, calibrated on what data, under which quality budget and latency targets — each named profile a scenario record that traces to the same weights."
+scenario_ids: [r1-tiny-train]
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2208.07339", label: "Dettmers et al. — LLM.int8(): 8-bit Matrix Multiplication (2022)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2211.10438", label: "Xiao et al. — SmoothQuant (2022)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2306.00978", label: "Lin et al. — AWQ: Activation-aware Weight Quantization (2023)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Q(·): The Deployment Matrix as a Scenario, Not a Second Model
+
+**Where we are.** The [family DAG](/transformers-systems/chapters/08-model-family/) named Q(·) a
+projection. This chapter makes the projection concrete — and doing so *before* Part 3 builds R1 is
+deliberate: knowing the served views a model must support is a design input to how it is trained and
+calibrated, not an afterthought. A deployment here is a **row in a matrix**, fully specified and
+version-pinned, never an unlabeled "the quantized one."
+
+## 1. A deployment is a specification, not an operation
+
+<Invariant note="what a Q profile fixes">
+A named deployment profile fixes six things: (i) **component-wise precision** — the vision encoder, the
+connector, the decoder, the KV cache, and the structured-decoding constraint may *each* run at a
+different numeric format; (ii) the **calibration dataset** the quantization was fit on; (iii) a
+**quality budget** — the maximum accuracy drop tolerated against the fp16 baseline; (iv)
+**service-level targets** — time-to-first-token, time-per-output-token, and model-bandwidth
+utilization; (v) **fallback behavior** when a request violates the profile's assumptions; and (vi)
+**artifact provenance**. A profile that omits any of these is not deployable — it is a hope.
+</Invariant>
+
+The word doing the work is *component-wise*. "Run R1 in INT8" is under-specified: the decoder's weights,
+the KV cache, and the structured-decoding logits have different sensitivities, and a real profile states
+each. Collapsing them into one number is exactly the units-erasure the [numbers
+contract](/transformers-systems/chapters/03-numbers-contract/) forbids.
+
+## 2. Precision is a per-component trade
+
+Quantization is the main lever a Q profile pulls, and it is a *trade against a budget*, not a free win.
+The public literature maps the trade: weight-only INT8/INT4 shrinks the memory a decode step must stream
+(the memory-bound regime of Part 0), while activation quantization is harder because outliers concentrate
+in a few channels — the problem LLM.int8() isolates in a high-precision path, and SmoothQuant and AWQ
+address by migrating or weighting the difficulty. The engineering point for the matrix is that each
+technique has a *measurable* quality cost, so each belongs to a profile with a stated quality budget,
+not to a blanket claim.
+
+## 3. Every profile is a scenario record
+
+<Invariant note="Q profiles inherit the numbers contract">
+Because a profile is fully specified and pinned, it *is* a scenario record in the sense of Part 0: it
+declares predicted numbers (expected throughput, expected quality drop), carries frozen denominators
+(peak bandwidth, device price), and is scored by a validator against a measured report. Two profiles of
+the same R1 — say a bf16 baseline and an INT8-decoder profile — trace to the *same* trained weights and
+the same parameter ledger, so their measured throughputs are directly comparable. The matrix is a set of
+scenarios over one model, which is what makes "profile A is $1.9\times$ profile B" a checkable claim
+rather than a slogan.
+</Invariant>
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The pilot's served view is a single baseline profile — **bf16 compute, fp32 master weights and optimizer
+state, fp32 reductions** — recorded as a scenario record with its denominators frozen. Additional Q
+profiles (INT8 decoder, paged KV) are introduced with the Part-5 serving machinery; the matrix's *shape*
+— component-wise precision, calibration, quality budget, SLO — is fixed here so every later profile slots
+into the same contract.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```yaml
+# A Q profile is a scenario record — pinned, comparable, and traceable to R1's weights:
+profile: r1-bf16-baseline
+precision: { decoder: bf16, kv_cache: bf16, structured_decode: fp32 }
+calibration: r0/val
+quality_budget: { max_accuracy_drop_vs_fp16: 0.00 }
+slo: { ttft_ms: null, tpot_ms: null, target: correctness-pilot }
+```
+</Versioned>
+
+**Where this goes.** Part 2 is complete: the family (DAG), the size (scaling laws), the shape
+(architecture), and the served views (this matrix) are all decided and frozen. Part 3 stops deciding and
+starts *building* — the forward pass, the FlashAttention kernel, the training loop, and deterministic
+resume — turning R1's specification into a model that trains.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2208.07339", label: "Dettmers et al., LLM.int8() — outlier-aware 8-bit inference" },
+  { tier: "T1", url: "https://arxiv.org/abs/2211.10438", label: "Xiao et al., SmoothQuant — migrating activation difficulty to weights" },
+  { tier: "T1", url: "https://arxiv.org/abs/2306.00978", label: "Lin et al., AWQ — activation-aware weight quantization" },
+]} />

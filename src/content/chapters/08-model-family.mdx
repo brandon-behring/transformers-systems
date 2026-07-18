@@ -1,0 +1,95 @@
+---
+title: "The Reference-Model Family: One Spine, Two Branches, One Projection"
+part: 2
+chapter: 9
+last_verified: 2026-07-17
+freshness: reference
+volatility: architectural-pattern
+tags: [reference-model, architecture, family, r1, r2, r3]
+concept_ids: [reference-model-dag, spine-model, deployment-projection, dense-before-sparse]
+description: "The family DAG the whole guide scales: a dense text spine R1, a sparse branch R2 and a document-AI branch R3, and a deployment projection Q that is a served view of a model, not a new model."
+scenario_ids: [r1-tiny-train]
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2307.09288", label: "Touvron et al. — Llama 2 (dense decoder family, 2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2101.03961", label: "Fedus et al. — Switch Transformers (sparse MoE, 2021)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2111.15664", label: "Kim et al. — Donut: OCR-free Document Understanding (2022)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Reference-Model Family: One Spine, Two Branches, One Projection
+
+**Where we are.** R0 froze the data and interface. Part 2 *decides the model* — and the first decision
+is not a hyperparameter but a **family structure**: what set of models we will build, how they relate,
+and what a "deployment" is. Fixing this DAG up front is what lets one reference model be carried,
+unbroken, from accounting to serving.
+
+## 1. The DAG
+
+<Invariant note="the reference-model family (there is no R4)">
+The family is a small directed graph rooted at the data contract:
+- **R0** — the data & interface contract. *Not a model* — the frozen substrate every model consumes.
+- **R1** — a dense text language model. *The spine*: the model the guide builds, trains, scales, and
+  serves end to end.
+- **R2** — a mixture-of-experts variant of R1, introduced only where sparsity earns its keep (scale and
+  expert parallelism).
+- **R3** — a dense document-AI vision-language model: the north star, branching from R1 by adding a
+  visual input path while reusing R1's tokenizer and decoder.
+- **Q(·)** — a *deployment projection* (component-wise precision, calibration, service objectives)
+  applicable to R1, R2, or R3. It is a served view of a model, **not a child model**.
+</Invariant>
+
+Every other decision in the guide is a coordinate in this graph. When a later chapter says "measure
+prefill latency," it means *of R1 under some Q*; when it says "reshard across eight devices," it means
+*R1 or R2's parameters*. The DAG is the address space.
+
+## 2. Why dense before sparse, and dense before multimodal
+
+Two ordering choices in the DAG are deliberate, and both are about **separability of failure**.
+
+- **Dense spine before sparse (R1 before R2).** A mixture-of-experts model adds routing, load
+  imbalance, and expert-parallel communication — failure modes orthogonal to the transformer itself.
+  Building the dense spine first means that when R2's throughput disappoints, we can attribute it to
+  routing, not to a bug we would also have in R1.
+- **Dense multimodal before sparse multimodal (R3 is dense).** R3 branches from the *dense* R1, not
+  from R2. Establishing a working dense document-VLM first keeps multimodal regressions (vision
+  encoder, connector, structured decoding) separable from routing/expert failures. Sparsity and
+  multimodality are each hard; composing them before either is solid multiplies the debugging surface.
+
+This is the same discipline as Part 0's split gates: never build a five-way conjunction when a chain of
+separable checks will do.
+
+## 3. A deployment is a projection, not a new model
+
+<Invariant note="Q(·) fixes what 'deployed' means">
+The most common category error in production ML is treating "the quantized model" as a new artifact.
+Here, **Q(·) is a projection**: it takes a trained model and fixes a *served view* of it — which
+components run at which precision (encoder, connector, decoder, KV cache, and structured decoding may
+each differ), against which calibration data, under which quality budget and latency targets. Two
+deployments of the same R1 are two projections, not two models; they share weights and provenance and
+differ only in the served view.
+</Invariant>
+
+Treating deployment as a projection is what keeps the numbers contract intact across serving: an
+INT8-decoder profile and a bf16 profile of R1 both trace to the *same* trained weights and the same
+predicted ledger, so their measured throughputs are comparable. Part 5 and Part 7 instantiate specific
+Q profiles; here we only fix that they are views.
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The pilot instantiates the spine at the smallest useful scale — **R1-tiny**, 6,327,552 parameters —
+and the R3 branch as an interface spike that reuses R1-tiny's decoder unchanged. R2 and the full Q
+matrix are introduced in later parts; the DAG is fixed now so nothing downstream contradicts it.
+</Renewable>
+
+**Where this goes.** The DAG says *which* models exist; it does not say how *big* they should be. The
+next chapter is the instrument that answers that: scaling laws, used not to predict a leaderboard but to
+turn a compute budget into a model shape.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2307.09288", label: "Touvron et al., Llama 2 — the dense decoder lineage R1 follows" },
+  { tier: "T1", url: "https://arxiv.org/abs/2101.03961", label: "Fedus et al., Switch Transformers — the sparse MoE branch R2 follows" },
+  { tier: "T1", url: "https://arxiv.org/abs/2111.15664", label: "Kim et al., Donut — the OCR-free document-VLM lineage R3 follows" },
+]} />
