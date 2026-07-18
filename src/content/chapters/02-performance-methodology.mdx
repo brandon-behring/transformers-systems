@@ -1,0 +1,127 @@
+---
+title: "Performance Methodology: Measuring Without Lying to Yourself"
+part: 0
+chapter: 3
+last_verified: 2026-07-17
+freshness: reference
+volatility: stable-principle
+tags: [methodology, benchmarking, throughput, variance, foundations]
+concept_ids: [warmup-steady-state, cuda-synchronization, throughput-variance, mfu-mbu, time-to-quality]
+description: "A measurement is a physical experiment: warm up, synchronize, fix a window, and report a distribution against a roofline — the discipline that separates a real number from a hopeful one."
+scenario_ids: [r1-tiny-train]
+code_path: "m1a_real.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T2", url: "https://mlcommons.org/benchmarks/training/", label: "MLCommons — MLPerf Training (time-to-quality contract)" }
+  - { tier: "T3", url: "https://horace.io/brrr_intro.html", label: "Horace He — Making Deep Learning Go Brrr" }
+  - { tier: "T2", url: "https://pytorch.org/tutorials/recipes/recipes/benchmark.html", label: "PyTorch — torch.utils.benchmark" }
+  - { tier: "T3", url: "https://www.anyscale.com/blog/reproducible-performance-metrics-for-llm-inference", label: "Anyscale — Reproducible Performance Metrics for LLM Inference" }
+  - { tier: "T3", url: "https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices", label: "Databricks — LLM Inference Performance Engineering (MFU/MBU/TPOT)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Performance Methodology: Measuring Without Lying to Yourself
+
+**Where we are.** The [resource ledgers](/transformers-systems/chapters/01-resource-accounting/) told
+us what a workload *should* cost. This chapter is about measuring what it *does* cost without fooling
+ourselves — because a GPU timing is a physical experiment, and an experiment run carelessly reports the
+warm-up, the Python interpreter, or a race condition instead of the model. Every "tok/s" in this book
+is produced by the discipline below.
+
+## 1. A measurement is a physical experiment
+
+<Invariant note="the three invariants of an honest timing">
+A device timing is trustworthy only if it (i) **warms up** — the first steps pay one-time costs
+(allocator growth, autotuning, cache population) that are not the steady state; (ii) **synchronizes**
+— GPU kernels launch asynchronously, so the wall clock must be pinned with a device barrier
+*before* the window opens and *after* it closes, or you time launch latency, not compute; and (iii)
+measures a **fixed window** of steady-state steps, reporting throughput as work $\div$ elapsed over
+that window. Omit any one and the number is not reproducible.
+</Invariant>
+
+These are not fussiness; each corresponds to a specific way the number goes wrong. Skip warm-up and
+you report a transient. Skip the barrier and, because kernels are queued asynchronously, the CPU races
+ahead and you time an empty queue. Skip the fixed window and you cannot say *what* was averaged.
+
+## 2. The overhead trap
+
+Not all time is compute. Time in the Python interpreter, in kernel-launch dispatch, in
+host↔device copies — this is **overhead**, the fourth roof from the foundations chapter. The tell is
+diagnostic: if a workload runs no faster when you shrink the tensors, it is overhead-bound, and the
+fix is fewer, larger kernels (fusion, CUDA graphs), not a faster GEMM. A profiler that shows the GPU
+idle between kernels is showing you overhead, and no amount of arithmetic tuning will move it.
+
+## 3. Report a distribution, not a point
+
+<Invariant note="variance is a first-class result">
+A single timing is a sample from a distribution shaped by clock throttling, background load, and
+scheduling. An honest report gives a location *and* a spread (median with an inter-quartile or
+min/max range), the sample size, and the machine — never a lone best-case number. Two systems whose
+ranges overlap are not distinguishable by that measurement.
+</Invariant>
+
+This is the discipline that makes claims *reproducible*: the reason so many published LLM performance
+numbers cannot be reproduced is that they report one hero run with no window, no barrier, and no
+spread. A number without its provenance is an anecdote.
+
+## 4. Two utilization ratios, tied to the roofline
+
+Throughput answers "how fast"; utilization answers "how close to the ceiling," and there are two
+ceilings:
+
+- **MFU** (model FLOPs utilization) $= \dfrac{\text{achieved model FLOP/s}}{\text{peak FLOP/s}}$ —
+  the *compute* roof. It is the right headline when a workload is compute-bound (large-batch training).
+- **MBU** (model bandwidth utilization) $= \dfrac{(\text{param bytes} + \text{KV bytes})/\text{TPOT}}{\text{peak bandwidth}}$ —
+  the *memory* roof. It is the right headline when a workload is memory-bound (single-stream decode),
+  where TPOT is time-per-output-token.
+
+Which ratio you quote is itself a claim about which side of the [ridge point](/transformers-systems/chapters/00-roofline/)
+you are on. Quoting MFU for a memory-bound decode makes a $2\%$ figure look like a failure when the
+device is in fact bandwidth-saturated.
+
+## 5. The only end-to-end training metric: time-to-quality
+
+Per-step throughput is a *component* metric — it can be gamed by doing useless work faster. The metric
+that cannot be gamed is **time-to-quality**: wall-clock time to train to a specified loss or accuracy
+target on a specified dataset (the MLPerf Training contract). It folds throughput, convergence, and
+numerical stability into one honest number. We report component metrics to *diagnose*, and
+time-to-quality to *decide*.
+
+Our pilot applies exactly this protocol — warm-up, barrier, fixed window, measured against the
+predicted ledger:
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+Training R1-tiny on real R0 tokens at batch 8: **10 untimed warm-up steps**, then a
+device-synchronized window of **190 timed steps**, yields $\approx\mathbf{82{,}000}$ tok/s and a loss
+descending $9.07 \to 6.26$. MFU is reported as *n/a* — this is a correctness pilot, and quoting a
+utilization ratio we have not carefully attributed would violate §4. The measured train-state
+(101.2 MB) matches the predicted ledger, closing the predict-then-measure loop.
+</Renewable>
+
+<Versioned as_of="2026-07-17" version="torch==2.13.0">
+```python
+warmup, timed = 10, 190
+for _ in range(warmup):              # untimed: absorbs allocator growth + autotune
+    train_step()
+torch.cuda.synchronize(); t0 = perf_counter()   # barrier BEFORE the window
+for _ in range(timed):
+    train_step()
+torch.cuda.synchronize()             # barrier AFTER — do not time an async queue
+tok_per_s = tokens / (perf_counter() - t0)
+```
+</Versioned>
+
+**Where this goes.** Warm-up, synchronization, a fixed window, and roofline-appropriate utilization are
+the substrate for every measurement in the book. The next chapter turns this discipline into a
+machine-checkable **contract**, so a measured number cannot silently drift from its predicted value.
+
+<SourceList sources={[
+  { tier: "T2", url: "https://mlcommons.org/benchmarks/training/", label: "MLCommons, MLPerf Training — wall-clock time to a quality target as the benchmark contract" },
+  { tier: "T3", url: "https://horace.io/brrr_intro.html", label: "Horace He, Making Deep Learning Go Brrr — compute vs memory vs overhead" },
+  { tier: "T2", url: "https://pytorch.org/tutorials/recipes/recipes/benchmark.html", label: "PyTorch, torch.utils.benchmark — CUDA synchronization and thread caveats" },
+  { tier: "T3", url: "https://www.anyscale.com/blog/reproducible-performance-metrics-for-llm-inference", label: "Anyscale — why LLM performance claims fail to reproduce" },
+  { tier: "T3", url: "https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices", label: "Databricks — MFU, MBU, and TPOT definitions" },
+]} />

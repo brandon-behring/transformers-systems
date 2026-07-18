@@ -1,0 +1,145 @@
+---
+title: "Resource Accounting: Parameters, FLOPs, and the Memory Ledger"
+part: 0
+chapter: 2
+last_verified: 2026-07-17
+freshness: theoretical
+volatility: stable-principle
+tags: [resource-accounting, parameters, flops, memory, foundations]
+concept_ids: [parameter-count, six-nd-flops, mac-factor, train-state-memory, embedding-tying]
+description: "Three hand-checkable ledgers — parameters, training FLOPs, and training-state bytes — worked end to end on the reference model R1-tiny, so every later number has a predicted value to be measured against."
+scenario_ids: [r1-tiny-train]
+code_path: "fixtures/r1_tiny.py"
+tests_path: "tests/test_r1_tiny_fixture.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T1", url: "https://arxiv.org/abs/2001.08361", label: "Kaplan et al. — Scaling Laws for Neural Language Models (2020)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/1706.03762", label: "Vaswani et al. — Attention Is All You Need (2017)" }
+  - { tier: "T2", url: "https://github.com/EleutherAI/cookbook/blob/main/calc/README.md", label: "EleutherAI Cookbook — calc/ parameter/FLOP/memory calculators" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2205.05198", label: "Korthikanti et al. — Reducing Activation Recomputation in Large Transformer Models (2022)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# Resource Accounting: Parameters, FLOPs, and the Memory Ledger
+
+**Where we are.** The [roofline](/transformers-systems/chapters/00-roofline/) told us *which*
+clock bounds a workload. This chapter fixes the quantities that go into those clocks. Before we
+run anything, we can predict — to the parameter — how big a model is, how much arithmetic one
+training token costs, and how many bytes its training state occupies. These three ledgers are the
+"predicted" half of the guide's predict-then-measure loop; every benchmark later in the book is
+scored against them.
+
+We work every identity on one model, the reference decoder **R1-tiny** (config frozen in the lab's
+`reference-model.md` §3): $d_\text{model}=256$, $n_\text{layers}=6$, $n_\text{heads}=8$ with
+$n_\text{kv}=2$ grouped-query heads of width $d_\text{head}=32$, SwiGLU inner $d_\text{ff}=704$,
+vocabulary $V=8192$, context $L=512$, tied embeddings.
+
+## 1. The parameter ledger
+
+<Invariant note="parameter count (architecture-exact)">
+A decoder layer's learnable weights are its four attention projections, its feed-forward matrices,
+and its norm scales. With grouped-query attention ($n_\text{kv} < n_\text{heads}$) the key/value
+projections shrink:
+$$P_\text{attn} = \underbrace{d_\text{model}\, n_\text{heads} d_\text{head}}_{W_Q} + \underbrace{2\, d_\text{model}\, n_\text{kv} d_\text{head}}_{W_K,\,W_V} + \underbrace{n_\text{heads} d_\text{head}\, d_\text{model}}_{W_O}.$$
+A SwiGLU feed-forward block has three matrices (gate, up, down), so
+$P_\text{ffn}=3\,d_\text{model}\,d_\text{ff}$. RMSNorm contributes one scale vector per norm
+($2\,d_\text{model}$ per layer). The total is
+$P = n_\text{layers}(P_\text{attn}+P_\text{ffn}+P_\text{norm}) + V d_\text{model} + d_\text{model}$,
+where the embedding is counted **once** because it is tied to the output projection.
+</Invariant>
+
+Instantiated for R1-tiny, every term is small enough to check by hand:
+
+- $W_Q = 256\cdot 256 = 65{,}536$; $W_K=W_V=256\cdot 64 = 16{,}384$; $W_O = 256\cdot 256 = 65{,}536$
+  $\Rightarrow P_\text{attn}=163{,}840$. (Note GQA has already halved $K,V$ relative to $8$ full heads.)
+- $P_\text{ffn} = 3\cdot 256\cdot 704 = 540{,}672$; $P_\text{norm}=512$.
+- Per layer $705{,}024$; six layers give $4{,}230{,}144$; add the final norm ($256$) for
+  $4{,}230{,}400$ **non-embedding** parameters — Kaplan's $N$.
+- The tied embedding is $V d_\text{model} = 8192\cdot 256 = 2{,}097{,}152$.
+
+$$P_\text{total} = 4{,}230{,}144 + 2{,}097{,}152 + 256 = \mathbf{6{,}327{,}552}.$$
+
+Embedding tying is not a rounding convenience: untied, R1-tiny would carry a *second*
+$2.1\text{M}$-parameter output matrix — a third of the model — for no measured quality gain at this
+scale. The **embedding-tying** decision is why $2.1\text{M}$ of the ledger, not $4.2\text{M}$, is
+vocabulary.
+
+## 2. The FLOP ledger
+
+<Invariant note="the 2× MAC factor and the 6·N rule">
+A multiply–accumulate is two floating-point operations — one multiply, one add — so a matmul with
+$N$ weight-multiplies costs $2N$ FLOPs of forward compute per token. The backward pass computes
+gradients with respect to *both* activations and weights, costing about twice the forward, so total
+training compute is $\approx 3\times$ forward:
+$$C_\text{train} \approx 6\, N_\text{matmul}\ \text{FLOPs/token}.$$
+This is the "$6ND$" rule. It counts only matmul parameters — norms are elementwise and negligible,
+and, crucially, it **omits the attention score/context term**, which scales with context length and
+must be added separately.
+</Invariant>
+
+R1-tiny has $N_\text{matmul}=6{,}324{,}224$ (the per-layer attention + FFN weights plus the tied
+embedding matmul). So the dense term is $6N_\text{matmul}=37{,}945{,}344$ FLOPs/token. The attention
+score ($QK^\top$) and context ($A V$) products add, per token,
+$n_\text{layers}\cdot 2\cdot(2 L\, n_\text{heads}d_\text{head})$ forward, tripled for training:
+$3\cdot 6\cdot 2\cdot(2\cdot 512\cdot 256) = 9{,}437{,}184$ FLOPs/token. Total:
+
+$$C_\text{train} = 37{,}945{,}344 + 9{,}437{,}184 = \mathbf{47{,}382{,}528}\ \text{FLOPs/token}.$$
+
+At the training batch of $32\times 512 = 16{,}384$ tokens, one optimizer step is
+$\approx 776\ \text{GFLOP}$. The attention term is $20\%$ of the total here **because** $L=512$ is
+short; at $L=8192$ it would dominate — the reason the $6ND$ rule alone silently under-counts
+long-context training.
+
+## 3. The memory ledger
+
+<Invariant note="training-state bytes per parameter">
+Mixed-precision AdamW keeps, for every parameter, a set of tensors whose byte cost is fixed
+independent of model size. One standard ledger: a bf16 weight (2 B) + bf16 gradient (2 B) + an fp32
+master copy (4 B) + Adam's first and second moments (4 B + 4 B) = **16 bytes/parameter**. The
+optimizer state alone — master + two moments — is $12$ of those $16$ bytes, so *most* of a training
+checkpoint is optimizer state, not weights.
+$$M_\text{train-state} = 16\, P_\text{total}\ \text{bytes}.$$
+</Invariant>
+
+For R1-tiny, $16\cdot 6{,}327{,}552 = 101{,}240{,}832$ bytes $\approx 101.2\ \text{MB}$ — the *fixed*
+cost, before a single activation. Activations are the variable cost: they scale with batch $\times$
+sequence and are what activation-recomputation trades compute for. On R1-tiny's batch a rough live-
+activation estimate is $\approx 403\ \text{MB}$, comfortably inside the RTX 2070 SUPER's budget — the
+whole reason a $6.3\text{M}$-parameter model is the right pilot for an $8\ \text{GB}$ card.
+
+The numbers above are *predicted* by a pure-stdlib fixture. Because they are contracted, the training
+run measures them and must agree:
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+Training R1-tiny on real R0 tokens, the harness measures the optimizer state directly (summing
+`weight + grad + exp_avg + exp_avg_sq` over every parameter group) at **101.2 MB**, matching the
+predicted $101{,}240{,}832$ bytes, and counts exactly $6{,}327{,}552$ parameters — the ledger and the
+allocator agree to the byte.
+</Renewable>
+
+Reproduce the predicted side yourself; it needs no GPU and no framework:
+
+<Versioned as_of="2026-07-17" version="CPython 3.12 · stdlib-only">
+```bash
+python3 fixtures/r1_tiny.py
+# params: total=6.33M  non-embedding=4.23M  embedding(tied)=2.10M
+# FLOPs/token (train): dense(6·N_matmul)=37.95M  attn(ctx=512)=9.44M  total=47.38M
+# train-state memory (16 B/param): 101.24MB
+```
+</Versioned>
+
+**Where this goes.** These three ledgers are inputs to every downstream decision: the FLOP ledger
+plus a compute budget fixes model *shape* (the scaling-laws chapter); the memory ledger fixes what
+fits per device and therefore the parallelism plan; and both are frozen into the **numbers contract**
+so a chapter that quotes "6.3M params" and a chapter that quotes a throughput can never rest on
+different arithmetic.
+
+<SourceList sources={[
+  { tier: "T1", url: "https://arxiv.org/abs/2001.08361", label: "Kaplan et al., Scaling Laws for Neural Language Models (2020) — the 2× MAC factor and 6·N training-FLOP rule" },
+  { tier: "T1", url: "https://arxiv.org/abs/1706.03762", label: "Vaswani et al., Attention Is All You Need (2017) — the attention score/context compute" },
+  { tier: "T2", url: "https://github.com/EleutherAI/cookbook/blob/main/calc/README.md", label: "EleutherAI Cookbook — calc/ (param, FLOP, and 12-bytes-optimizer memory calculators)" },
+  { tier: "T1", url: "https://arxiv.org/abs/2205.05198", label: "Korthikanti et al., Reducing Activation Recomputation (2022) — activations as the variable memory cost" },
+]} />

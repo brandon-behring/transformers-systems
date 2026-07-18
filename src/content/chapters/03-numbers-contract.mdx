@@ -1,0 +1,116 @@
+---
+title: "The Numbers Contract: Making a Claim That Cannot Silently Drift"
+part: 0
+chapter: 4
+last_verified: 2026-07-17
+freshness: reference
+volatility: stable-principle
+tags: [numbers-contract, provenance, reproducibility, ci, foundations]
+concept_ids: [numbers-contract, scenario-record, numbers-hash-drift, measured-vs-predicted, frozen-denominators, provenance-irv]
+description: "The machine that turns Part 0's ledgers and measurement discipline into a CI gate: a scenario record, a config hash, frozen denominators, and a predict-then-measure check — plus the I/R/V provenance that carries it into the prose."
+scenario_ids: [r1-tiny-train]
+code_path: "bench/contract.py"
+tests_path: "tests/test_numbers_contract.py"
+measured_on: "Tier-0 RTX 2070 SUPER"
+sources:
+  - { tier: "T3", url: "https://www.anyscale.com/blog/reproducible-performance-metrics-for-llm-inference", label: "Anyscale — Reproducible Performance Metrics for LLM Inference" }
+  - { tier: "T2", url: "https://mlcommons.org/benchmarks/training/", label: "MLCommons — MLPerf Training (fixed dataset, fixed target)" }
+---
+import Invariant from '../../components/Invariant.astro';
+import Renewable from '../../components/Renewable.astro';
+import Versioned from '../../components/Versioned.astro';
+import SourceList from '../../components/SourceList.astro';
+
+# The Numbers Contract: Making a Claim That Cannot Silently Drift
+
+**Where we are.** We can now *predict* a workload's cost (the
+[ledgers](/transformers-systems/chapters/01-resource-accounting/)) and *measure* it honestly (the
+[methodology](/transformers-systems/chapters/02-performance-methodology/)). The remaining failure mode
+is drift: a config changes, a chapter still quotes the old parameter count, and a coupled chapter's
+throughput now rests on arithmetic that no longer holds — with nothing to catch it. This chapter is the
+machine that catches it. It is the reason a reader can trust every number in the book to trace back to
+a runnable fixture.
+
+## 1. A number is a four-clause contract
+
+<Invariant note="what it means to publish a number here">
+A contracted number is emitted by a scenario–report pair that a validator checks on four clauses:
+1. **Identity** — the report names the scenario it claims to fulfill.
+2. **Hash agreement** — the scenario's pinned config hash equals the *live* fixture hash, and the
+   report carries that same hash. A changed config with an unchanged number cannot pass.
+3. **Exact contracted set** — the metrics the scenario declares contracted are measured *exactly*:
+   none missing, none extra. A silently dropped measurement fails as loudly as a wrong one.
+4. **Predict-then-measure** — each contracted metric lands within tolerance ($2\%$) of its predicted
+   value. The prediction comes from the ledger; the measurement from the run.
+Passing all four is the only way a number enters the guide.
+</Invariant>
+
+The design choice that makes this bite is that clauses 2–4 are *conjunctive and mechanical*. There is
+no human judgement about whether a change "matters"; if the config moved, the hash moves, and every
+scenario pinned to the old hash fails until re-verified.
+
+## 2. The config hash covers the units, not just the values
+
+The drift gate rests on a `numbers_hash`: a SHA-256 over the model's **full frozen config, the
+predicted numbers, and the counting conventions** — the $2\times$ MAC factor, the $6N$ rule's
+matmul-only scope, the $16$-bytes-per-parameter ledger. Hashing the *units* alongside the *values* is
+deliberate: two teams can compute "$47\text{M}$ FLOPs/token" under different conventions (per-token vs
+per-sequence, forward-only vs training) and a values-only hash would call them equal. Composing-numbers
+bugs hide in unlabeled units, so the units are in the hash.
+
+Concretely, the scenario record is a small frozen object — an `id`, the `contracted` metric names, the
+`predicted` values, and `numbers_hash` — written once and checked forever:
+
+<Versioned as_of="2026-07-17" version="CPython 3.12 · PyYAML">
+```python
+from bench.contract import build_r1_tiny_scenario, validate
+scenario = build_r1_tiny_scenario()      # {id, contracted:[params_total, train_state_bytes], predicted, numbers_hash}
+problems = validate(scenario, report)    # [] means all four clauses pass; CI fails on any entry
+```
+</Versioned>
+
+## 3. Frozen denominators
+
+A raw throughput is not yet a decision; utilization and cost per token are throughput divided by a
+**denominator** — peak FLOP/s, peak bandwidth, device price, power. If a chapter is free to pick its
+own denominators, two chapters can quote incomparable "MFU" or "\$/token" figures and both be
+"correct." So the reference denominators (the lab's `reference-model.md` §7) are frozen, and the
+validator requires every report to carry them. A number is comparable across the book only because its
+divisor is not a free variable.
+
+## 4. Carrying the contract into the prose: I/R/V
+
+A CI gate protects the *numbers*; the *sentences* around them rot on a different clock. So each factual
+sentence in this guide is tagged by how it ages — the provenance model you have seen in every chapter:
+
+- **Invariant** — a timeless identity (the ledgers, the roofline). No expiry; it is an argument, not a
+  measurement.
+- **Renewable** — a measured constant, stamped `last_measured` and `measured_on`. It expires (365-day
+  TTL) and must be re-measured, because hardware and code move.
+- **Versioned** — a toolchain-specific command, stamped `as_of` and pinned to a supported version
+  (90-day TTL). It expires faster, because frameworks move fastest.
+
+A freshness gate fails CI when any Renewable or Versioned block passes its TTL, and a version-matrix
+gate fails when a `Versioned` block pins a toolchain version outside the tested set. The provenance is
+not decoration — it is the same predict-then-measure discipline, enforced on prose.
+
+The validator runs green on the pilot's own report, which is how Part 0 closes its loop:
+
+<Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
+The R1-tiny training run emits a benchmark report; `validate(scenario, report)` returns an **empty
+problem list** — identity holds, the report's hash equals the live fixture hash, `params_total` and
+`train_state_bytes` are measured exactly and land within $2\%$ of prediction (in fact to the byte), and
+the frozen denominators are present. The negative tests confirm the teeth: mutating the config, dropping
+a contracted metric, or perturbing a measured value each makes the validator fail.
+</Renewable>
+
+**Where this goes.** Every subsequent part emits its numbers through this contract: the kernel chapters
+measure latency against a predicted FLOP count, the parallelism chapters measure memory against the
+ledger, the serving chapters measure throughput against frozen denominators. Part 0 is complete — we
+have the mental model (roofline), the ledgers (accounting), the discipline (methodology), and the gate
+(this contract). The rest of the book is one reference model carried through them.
+
+<SourceList sources={[
+  { tier: "T3", url: "https://www.anyscale.com/blog/reproducible-performance-metrics-for-llm-inference", label: "Anyscale — the reproducibility failures a numbers contract is designed to prevent" },
+  { tier: "T2", url: "https://mlcommons.org/benchmarks/training/", label: "MLCommons, MLPerf Training — fixing the dataset and target so numbers are comparable" },
+]} />
