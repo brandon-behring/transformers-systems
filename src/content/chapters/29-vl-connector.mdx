@@ -13,6 +13,7 @@ code_path: "vlm/spike.py"
 measured_on: "Tier-0 RTX 2070 SUPER"
 sources:
   - { tier: "T1", url: "https://arxiv.org/abs/2304.08485", label: "Liu et al. — Visual Instruction Tuning (LLaVA, 2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2310.03744", label: "Liu et al. — Improved Baselines with Visual Instruction Tuning (LLaVA-1.5, 2023)" }
   - { tier: "T1", url: "https://arxiv.org/abs/2204.14198", label: "Alayrac et al. — Flamingo: a Visual Language Model (2022)" }
 ---
 import Invariant from '../../components/Invariant.astro';
@@ -32,9 +33,13 @@ text tokens so the entire text decoder works unchanged.
 <Invariant note="the connector">
 The connector maps each visual token from the encoder's output dimension into the decoder's embedding
 dimension, so that a visual token becomes indistinguishable — in shape and space — from a text token
-embedding. The simplest connector that works is a small **MLP projector** (two linear layers with a
-nonlinearity); more elaborate connectors *resample* many visual tokens down to a fixed few. Whatever its
-form, the connector's contract is the same: emit vectors in the decoder's embedding space.
+embedding. The simplest connector that works is a single **linear projection** — LLaVA's original design;
+LLaVA-1.5 showed that a small two-layer **MLP projector** improves on it, and R3's contract adopts the MLP.
+More elaborate connectors *resample* many visual tokens down to a fixed few. Within this prefix family the
+connector's contract is the same: emit vectors in the decoder's embedding space, where visual tokens occupy
+self-attention KV positions like text. A second family does neither: Flamingo's Perceiver Resampler feeds
+**gated cross-attention** layers interleaved into the decoder, injecting visual states without ever entering
+the embedding space or the self-attention prefix.
 </Invariant>
 
 The elegance is that once visual tokens are in the decoder's space, *nothing else changes*: the same
@@ -68,7 +73,9 @@ document task. The connector is trained first because it is the smallest suffici
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
 The pilot's connector is a 2-layer MLP projector (Linear → GELU → Linear) mapping the encoder's visual
 tokens into R1-tiny's $d_\text{model}=256$ space, prepended to the text embeddings; the decoder then runs
-unchanged. This proves the space-bridging wiring end to end on Tier-0. The LLaVA-style staged schedule
+unchanged. This proves the prefix wiring end to end on Tier-0 — with one caveat: the spike's encoder is
+built at the decoder's width, so the projector maps $256 \to 256$ and the dimension-bridging case (encoder
+dim ≠ decoder dim) is unexercised. The LLaVA-style staged schedule
 (freeze encoder+decoder, train projector; then PEFT the decoder) is the specified production recipe.
 </Renewable>
 
@@ -76,7 +83,10 @@ unchanged. This proves the space-bridging wiring end to end on Tier-0. The LLaVA
 ```python
 vis = self.projector(self.enc(img))       # visual tokens -> decoder embedding space
 txt = self.dec.embed(text_ids)            # text tokens -> same space
-h   = self.dec_forward(torch.cat([vis, txt], dim=1))   # [visual prefix | text], decoder unchanged
+h = torch.cat([vis, txt], dim=1)          # [visual prefix | text]
+cos, sin = self.dec.rope_cos, self.dec.rope_sin
+for blk in self.dec.blocks:               # decoder blocks run unchanged
+    h = blk(h, cos, sin)
 ```
 </Versioned>
 
@@ -84,6 +94,7 @@ h   = self.dec_forward(torch.cat([vis, txt], dim=1))   # [visual prefix | text],
 into markup. The next chapter is that training — and why a single overfit document is the right first proof.
 
 <SourceList sources={[
-  { tier: "T1", url: "https://arxiv.org/abs/2304.08485", label: "Liu et al., LLaVA — the MLP projector and staged visual instruction tuning" },
-  { tier: "T1", url: "https://arxiv.org/abs/2204.14198", label: "Alayrac et al., Flamingo — the connector/resampler taxonomy" },
+  { tier: "T1", url: "https://arxiv.org/abs/2304.08485", label: "Liu et al., LLaVA — the linear projector and staged visual instruction tuning" },
+  { tier: "T1", url: "https://arxiv.org/abs/2310.03744", label: "Liu et al., LLaVA-1.5 — the two-layer MLP projector improving on the linear design" },
+  { tier: "T1", url: "https://arxiv.org/abs/2204.14198", label: "Alayrac et al., Flamingo — the cross-attention family: Perceiver Resampler + gated cross-attention" },
 ]} />

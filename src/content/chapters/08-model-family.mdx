@@ -37,7 +37,8 @@ The family is a small directed graph rooted at the data contract:
 - **R2** — a mixture-of-experts variant of R1, introduced only where sparsity earns its keep (scale and
   expert parallelism).
 - **R3** — a dense document-AI vision-language model: the north star, branching from R1 by adding a
-  visual input path while reusing R1's tokenizer and decoder.
+  visual input path while reusing R1's tokenizer and decoder. The contract admits an optional
+  **R3-MoE** composition, only after the R2 and R3 branches are each solid.
 - **Q(·)** — a *deployment projection* (component-wise precision, calibration, service objectives)
   applicable to R1, R2, or R3. It is a served view of a model, **not a child model**.
 </Invariant>

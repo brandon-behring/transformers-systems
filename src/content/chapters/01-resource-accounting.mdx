@@ -32,8 +32,8 @@ training token costs, and how many bytes its training state occupies. These thre
 "predicted" half of the guide's predict-then-measure loop; every benchmark later in the book is
 scored against them.
 
-We work every identity on one model, the reference decoder **R1-tiny** (config frozen in the lab's
-`reference-model.md` §3): $d_\text{model}=256$, $n_\text{layers}=6$, $n_\text{heads}=8$ with
+We work every identity on one model, the reference decoder **R1-tiny** (config frozen in
+`reference-model.md` §3 at this book's repo root): $d_\text{model}=256$, $n_\text{layers}=6$, $n_\text{heads}=8$ with
 $n_\text{kv}=2$ grouped-query heads of width $d_\text{head}=32$, SwiGLU inner $d_\text{ff}=704$,
 vocabulary $V=8192$, context $L=512$, tied embeddings.
 
@@ -81,7 +81,11 @@ must be added separately.
 </Invariant>
 
 R1-tiny has $N_\text{matmul}=6{,}324{,}224$ (the per-layer attention + FFN weights plus the tied
-embedding matmul). So the dense term is $6N_\text{matmul}=37{,}945{,}344$ FLOPs/token. The attention
+embedding matmul). This is **not** Kaplan's non-embedding $N=4{,}230{,}400$ from §1: Kaplan's rule
+excludes the embedding, while our convention deliberately includes the tied-embedding matmul — at
+this scale it is a third of all matmul work. Two $N$'s share the symbol but not the value, and it is
+$N_\text{matmul}$ that the numbers contract hashes. So the dense term is
+$6N_\text{matmul}=37{,}945{,}344$ FLOPs/token. The attention
 score ($QK^\top$) and context ($A V$) products add, per token,
 $n_\text{layers}\cdot 2\cdot(2 L\, n_\text{heads}d_\text{head})$ forward, tripled for training:
 $3\cdot 6\cdot 2\cdot(2\cdot 512\cdot 256) = 9{,}437{,}184$ FLOPs/token. Total:
@@ -96,28 +100,47 @@ long-context training.
 ## 3. The memory ledger
 
 <Invariant note="training-state bytes per parameter">
-Mixed-precision AdamW keeps, for every parameter, a set of tensors whose byte cost is fixed
-independent of model size. One standard ledger: a bf16 weight (2 B) + bf16 gradient (2 B) + an fp32
-master copy (4 B) + Adam's first and second moments (4 B + 4 B) = **16 bytes/parameter**. The
-optimizer state alone — master + two moments — is $12$ of those $16$ bytes, so *most* of a training
-checkpoint is optimizer state, not weights.
-$$M_\text{train-state} = 16\, P_\text{total}\ \text{bytes}.$$
+AdamW training state is a fixed set of per-parameter tensors — the weight, its gradient, and Adam's
+first and second moments — so bytes/parameter is set by the precision recipe alone, independent of
+model size. Under the pilot's **pure-fp32** recipe each of the four costs 4 B:
+$$M_\text{train-state} = (4+4+4+4)\, P_\text{total} = 16\, P_\text{total}\ \text{bytes}.$$
+The **optimizer state** proper — the two Adam moments — is $8$ of those $16$ bytes: as large as
+weights and gradients combined.
 </Invariant>
 
-For R1-tiny, $16\cdot 6{,}327{,}552 = 101{,}240{,}832$ bytes $\approx 101.2\ \text{MB}$ — the *fixed*
-cost, before a single activation. Activations are the variable cost: they scale with batch $\times$
-sequence and are what activation-recomputation trades compute for. On R1-tiny's batch a rough live-
-activation estimate is $\approx 403\ \text{MB}$, comfortably inside the RTX 2070 SUPER's budget — the
-whole reason a $6.3\text{M}$-parameter model is the right pilot for an $8\ \text{GB}$ card.
+For R1-tiny, $16\cdot 6{,}327{,}552 = 101{,}240{,}832$ bytes $\approx 101.2\ \text{MB}$ of **train
+state** — the *fixed* cost, before a single activation — of which the two moments are
+$50.6\ \text{MB}$.
+
+The frozen contract (§3) targets a different recipe, **mixed precision**: bf16 weight (2 B) + bf16
+gradient (2 B) + fp32 master copy (4 B) + moments (4 B + 4 B) = 16 bytes/parameter — and 18 with
+fp32 gradients. That recipe is design-forward, not measured: the pilot deviations register
+(ADR 0002) records that the run below is pure fp32. That both recipes total "16 B/param" is a
+coincidence of two different unit conventions — exactly the same-scalar-different-units trap the
+numbers contract warns about — so a bytes-per-parameter figure means nothing until its
+decomposition is named.
+
+Activations are the variable cost: they scale with batch $\times$ sequence and are what
+activation-recomputation trades compute for. Here a hand estimate misleads: counting only
+$d_\text{model}$-wide tensors gives $\approx 403\ \text{MB}$ at the contract's $32\times 512$ token
+batch, yet that formula omits the fp32 logits tensor alone
+($16{,}384\times 8{,}192 \approx 537\ \text{MB}$ at batch 32 — larger than the whole estimate) and
+the $d_\text{ff}$-wide SwiGLU intermediates. The measurement is the honest anchor: the run below
+peaks at $1{,}171{,}365{,}888$ bytes $\approx 1.17\ \text{GB}$ at batch $8$ — one *quarter* of
+those tokens — of which $\approx 1.07\ \text{GB}$ beyond the train state is activations, workspace,
+and allocator overhead. It is the measured peak, not the estimate, that says a
+$6.3\text{M}$-parameter model fits comfortably on an $8\ \text{GB}$ card, with the envelope scaled
+to the full contract batch still well inside the budget.
 
 The numbers above are *predicted* by a pure-stdlib fixture. Because they are contracted, the training
 run measures them and must agree:
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-Training R1-tiny on real R0 tokens, the harness measures the optimizer state directly (summing
-`weight + grad + exp_avg + exp_avg_sq` over every parameter group) at **101.2 MB**, matching the
-predicted $101{,}240{,}832$ bytes, and counts exactly $6{,}327{,}552$ parameters — the ledger and the
-allocator agree to the byte.
+Training R1-tiny on real R0 tokens under the pure-fp32 recipe, the harness measures the train state
+directly (summing `weight + grad + exp_avg + exp_avg_sq` over every parameter group) at
+**101.2 MB**, matching the predicted $101{,}240{,}832$ bytes, counts exactly $6{,}327{,}552$
+parameters, and records a peak allocation of $1{,}171{,}365{,}888$ bytes (≈**1.17 GB**) at batch 8
+— the ledger and the allocator agree to the byte.
 </Renewable>
 
 Reproduce the predicted side yourself; it needs no GPU and no framework:

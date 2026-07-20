@@ -49,9 +49,10 @@ contract](/transformers-systems/chapters/03-numbers-contract/) forbids.
 
 Quantization is the main lever a Q profile pulls, and it is a *trade against a budget*, not a free win.
 The public literature maps the trade: weight-only INT8/INT4 shrinks the memory a decode step must stream
-(the memory-bound regime of Part 0), while activation quantization is harder because outliers concentrate
-in a few channels — the problem LLM.int8() isolates in a high-precision path, and SmoothQuant and AWQ
-address by migrating or weighting the difficulty. The engineering point for the matrix is that each
+(the memory-bound regime of Part 0) — AWQ belongs to this family, using activation statistics only to
+*select* the salient weight channels to protect — while activation quantization is harder because outliers
+concentrate in a few channels: the problem LLM.int8() isolates in a high-precision path, and SmoothQuant
+addresses by migrating the difficulty from activations into weights. The engineering point for the matrix is that each
 technique has a *measurable* quality cost, so each belongs to a profile with a stated quality budget,
 not to a blanket claim.
 
@@ -68,26 +69,33 @@ rather than a slogan.
 </Invariant>
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-The pilot's served view is a single baseline profile — **bf16 compute, fp32 master weights and optimizer
-state, fp32 reductions** — recorded as a scenario record with its denominators frozen. Additional Q
-profiles (INT8 decoder, paged KV) are introduced with the Part-5 serving machinery; the matrix's *shape*
-— component-wise precision, calibration, quality budget, SLO — is fixed here so every later profile slots
+The pilot records **no served view yet**. Its only scenario record is `r1-tiny-train` — a *training*
+scenario, pure fp32 AdamW end to end; the frozen contract's §3 precision target (bf16 compute, fp32
+master weights) is design-forward per the pilot deviations register (ADR 0002). Master weights and
+optimizer state are in any case training-side quantities that no Q profile mentions: a profile is
+defined by the *serving* quantities of §1. Serving profiles (a bf16 baseline, an INT8 decoder, paged
+KV) belong to the Part-5 serving machinery; what is fixed here is the matrix's *shape* — component-wise
+precision, calibration, quality budget, SLO, fallback, provenance — so every later profile slots
 into the same contract.
 </Renewable>
 
 <Versioned as_of="2026-07-17" version="torch==2.13.0">
 ```yaml
-# A Q profile is a scenario record — pinned, comparable, and traceable to R1's weights:
-profile: r1-bf16-baseline
+# What a complete Q profile will look like — a schema illustration, NOT a recorded artifact
+# (the pilot's only scenario record is the fp32 training run; see ADR 0002):
+profile: r1-bf16-baseline            # design-forward example
 precision: { decoder: bf16, kv_cache: bf16, structured_decode: fp32 }
-calibration: r0/val
-quality_budget: { max_accuracy_drop_vs_fp16: 0.00 }
+calibration: r0/val                  # design-forward: as-built r0 has no splits yet (ADR 0002)
+quality_budget: { max_accuracy_drop_vs_fp16: 0.005 }   # nonzero; a 0.00 budget vs fp16 is unsatisfiable
 slo: { ttft_ms: null, tpot_ms: null, target: correctness-pilot }
+fallback: { on_profile_violation: serve-fp32-reference }
+provenance: { weights: <trained-checkpoint sha256>, code: transformers-systems-lab@<commit> }
 ```
 </Versioned>
 
-**Where this goes.** Part 2 is complete: the family (DAG), the size (scaling laws), the shape
-(architecture), and the served views (this matrix) are all decided and frozen. Part 3 stops deciding and
+**Where this goes.** Part 2 is complete: the family (DAG), the size (a scoping choice the scaling-laws
+chapter locates on the compute-optimal frontier), the shape (architecture), and the served-view schema
+(this matrix) are all decided and frozen. Part 3 stops deciding and
 starts *building* — the forward pass, the FlashAttention kernel, the training loop, and deterministic
 resume — turning R1's specification into a model that trains.
 

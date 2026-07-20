@@ -7,7 +7,7 @@ freshness: reference
 volatility: architectural-pattern
 tags: [inference, kv-cache, decode, serving]
 concept_ids: [autoregressive-decode, kv-cache, cache-reuse, decode-memory]
-description: "Why generation without a cache is quadratic, how storing past keys and values makes each new token linear, and why that cache — not the weights — becomes the memory the decode step streams."
+description: "Why generation without a cache redoes the past every step, how storing past keys and values removes that recomputation, and when the growing cache — rather than the fixed weights — comes to dominate the memory the decode step streams."
 scenario_ids: [r1-tiny-train]
 code_path: "serve/paged_kv.py"
 measured_on: "Tier-0 RTX 2070 SUPER"
@@ -24,16 +24,18 @@ import SourceList from '../../components/SourceList.astro';
 
 **Where we are.** Parts 3–4 trained R1 at scale. Part 5 serves it — and serving obeys a completely
 different economics from training, because it produces *one token at a time*. This chapter introduces the
-data structure that makes that tractable, the KV-cache, and shows why it, not the weights, dominates the
-memory a decode step moves.
+data structure that makes that tractable, the KV-cache, and shows when it — the one term that grows with
+context and concurrency while the weights stay fixed — overtakes the weights as the memory a decode step
+moves.
 
 ## 1. Generation without a cache is quadratic
 
 <Invariant note="the redundant recomputation">
-An autoregressive decoder generates token $t$ by attending over tokens $1..t{-}1$. Computed naïvely, each
-new token recomputes the keys and values for *all* previous tokens — so generating a sequence of length
-$T$ costs $O(T^2)$ attention work, most of it re-deriving keys and values that have not changed since the
-step that first produced them. The past is fixed; recomputing it is pure waste.
+An autoregressive decoder generates token $t$ by attending over tokens $1..t{-}1$. Computed naïvely — a
+full forward pass over the whole sequence at every step — each new token re-projects the keys and values of
+*all* previous tokens and re-forms the full attention map, an $O(t^2)$ cost per step, most of it re-deriving
+quantities that have not changed since the step that first produced them. The past is fixed; recomputing it
+is pure waste.
 </Invariant>
 
 ## 2. The cache makes each token linear
@@ -41,14 +43,17 @@ step that first produced them. The past is fixed; recomputing it is pure waste.
 <Invariant note="the KV-cache">
 Because a past token's key and value never change, they can be computed once and stored. The **KV-cache**
 holds, per layer, the keys and values of every token generated so far; a new token computes only *its own*
-query, key, and value, appends the latter two to the cache, and attends against the whole cache. Per-token
-work drops from $O(t)$ recomputation to $O(1)$ new projection plus an $O(t)$ read of the cache — turning
-quadratic generation into linear. The cost moves from *compute* to *memory*: the cache must be stored and
-streamed every step.
+query, key, and value, appends the latter two to the cache, and attends against the whole cache. Per-step
+cost falls from $O(t^2)$ to an $O(1)$ new projection plus the unavoidable $O(t)$ read of the cache; summed
+over a sequence, total attention work remains $O(T^2)$ — the win is removing the redundant projection FLOPs
+and a large constant, not the quadratic. And the cost that remains moves from *compute* to *memory*: the
+cache must be stored and streamed every step.
 </Invariant>
 
-This is the trade that defines inference: we spend memory to erase redundant compute, and in doing so make
-the decode step *memory-bound* — exactly the regime the roofline warned streams bytes, not FLOPs.
+The lab's reference `generate()` is exactly the naïve baseline — a full forward pass per new token — so
+against it the cache's per-step win is $O(t^2) \to O(t)$. This is the trade that defines inference: we
+spend memory to erase redundant compute, and in doing so make the decode step *memory-bound* — exactly the
+regime the roofline warned streams bytes, not FLOPs.
 
 ## 3. The cache is the inference memory budget
 
@@ -57,21 +62,34 @@ The cache holds $2$ (K and V) $\times\ n_\text{layers} \times n_\text{kv} \times
 token per sequence, times the bytes per value. It grows linearly with sequence length and with the number
 of concurrent sequences, and at long context or high concurrency it dwarfs the model weights. This is why
 the architecture chapter's **grouped-query attention** was an inference decision: using $n_\text{kv}=2$
-instead of $8$ heads shrinks the cache — and thus the bytes each decode step streams — by $4\times$.
+instead of $8$ heads shrinks the cache — and, wherever the cache is the dominant streamed term, the bytes
+each decode step moves — by $4\times$.
 </Invariant>
 
-The KV-cache is where R1-tiny's Part-2 GQA choice pays off: the $4\times$ smaller cache is a $4\times$
-reduction in the dominant decode-time memory traffic.
+Whether the cache dominates is a matter of scale, not principle. R1-tiny's decode step streams every
+weight — $6{,}327{,}552$ parameters, $\approx 25.3$ MB in fp32 — while the cache costs $3{,}072$ bytes per
+cached token ($2 \times 6 \times 2 \times 32 = 768$ values), so even a full $512$-token context holds only
+$\approx 1.57$ MB. The weight stream outweighs the cache by $\approx 16\times$ at maximum context and by
+$\approx 200\times$ at the narrated run's $\sim 40$ cached tokens; the two would meet only near $8{,}238$
+cached tokens — about $16$ max-context sequences. Production servers live past that crossover; the
+single-sequence pilot does not: GQA's $4\times$ cache cut trims the total decode-step bytes by roughly
+$15\%$ at the full $512$-token context ($31.60 \to 26.88$ MB versus an $n_\text{kv}{=}8$ cache) and by only
+$\approx 1\%$ at the narrated $\sim 40$-token run — far from a $4\times$ cut in the dominant term, which
+remains the weight stream. It is an investment in the concurrent, long-context regime the invariant above
+describes.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-The lab's serving path caches K/V per layer and generates incrementally; its acceptance test pins the
-invariant that **cached incremental decode produces bit-identical greedy tokens to a full recompute** — the
-cache is a pure efficiency optimization, changing what is stored, never what is produced.
+The lab's serving path caches K/V per layer and generates incrementally; its parity test
+(`tests/test_paged_kv.py`) pins the invariant that **cached incremental decode reproduces the greedy token
+IDs of a full recompute** — the cache is a pure efficiency optimization, changing what is stored, never
+what is produced. The test needs torch, so it runs on Tier-0 and self-skips loudly on the torch-less hosted
+CI lane; no serving scenario record exists yet, and the byte arithmetic above has no calculation fixture —
+both are recorded in the pilot deviations register (ADR 0002, deviation 7).
 </Renewable>
 
 **Where this goes.** The cache splits inference into two phases with opposite characters — filling the
-cache for a prompt, and extending it one token at a time. The next chapter shows they sit on opposite sides
-of the roofline.
+cache for a prompt, and extending it one token at a time. The next chapter shows why, at serving scale,
+they sit on opposite sides of the roofline.
 
 <SourceList sources={[
   { tier: "T1", url: "https://arxiv.org/abs/2211.05102", label: "Pope et al., Efficiently Scaling Transformer Inference — the KV-cache and its costs" },

@@ -37,19 +37,22 @@ of Part 0 applied to behavior: the eval set is checksummed, the metric is determ
 failure, not a discussion.
 </Invariant>
 
-The document model makes this concrete: its structural metric — does the produced markup match the
-ground-truth structure — runs on a frozen document set every checkpoint, and a checkpoint that regresses it
-is rejected automatically. Selection, RLVR reward, and CI gate are one metric.
+The document model is designed to make this concrete: its structural metric — does the produced markup
+match the ground-truth structure — is specified to run on a frozen document set every checkpoint, with any
+checkpoint that regresses it rejected automatically. Selection, RLVR reward, and CI gate are one metric by
+design.
 
 ## 2. Contamination invalidates the measurement
 
 <Invariant note="the eval set must be disjoint from training">
 A benchmark score is meaningless if the benchmark leaked into training: the model then *recalls* the answer
 instead of *solving* the task, and the number measures memorization, not capability. Guarding against it is
-a data-pipeline discipline — the eval and contamination-probe document ids are excluded from training by
-hash, and any external eval set is n-gram-decontaminated against the corpus. This is why R0 froze a
-held-out contamination probe: the eval's validity is a *property of the data contract*, established before
-training, not a hope checked after.
+a data-pipeline discipline, and it is why the frozen contract (`reference-model.md` §2.1) specifies
+train/val splits plus a held-out contamination probe — split by document id, frozen, hashed, with val and
+probe ids excluded from training and external eval sets n-gram-decontaminated against the corpus. The
+eval's validity is a *property of the data contract*, established before training, not a hope checked
+after. The as-built pilot R0 has none of these splits yet (ADR 0002, deviation 3); building them is the
+prerequisite for any trustworthy eval number.
 </Invariant>
 
 ## 3. Statistical rigor: is the gain real?
@@ -64,11 +67,13 @@ Part 0's "report a distribution, not a point," now guarding *quality* rather tha
 </Invariant>
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-The guide *practices* eval-as-CI on itself: the numbers-contract validator, the golden accounting fixture,
-and the kernel/gate parity tests run as CI and fail the build on any drift — the same discipline this
-chapter prescribes for model quality, applied to the guide's own numbers. The model-quality eval harness
-(structural metric on a frozen document set) is specified as the R3 selection-and-reward signal; it is
-design-forward on Tier-0, reusing this machine.
+The guide *practices* eval-as-CI on itself, with an honest split: hosted CI runs the numbers-contract
+validator, the golden accounting fixture, and the R0 batch golden test, failing the build on any drift;
+the kernel-parity and resume-gate checks run locally on Tier-0, and the kernel test self-skips loudly on
+the GPU-less hosted lane rather than pretending to pass — the same discipline this chapter prescribes for
+model quality, applied to the guide's own numbers. The model-quality eval harness (structural metric on a
+frozen document set) is specified as the R3 selection-and-reward signal; it is design-forward on Tier-0,
+reusing this machine.
 </Renewable>
 
 **Where this goes.** Part 6 completes the text model's lifecycle — capability, format, preference, and the

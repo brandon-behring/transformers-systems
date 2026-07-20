@@ -15,6 +15,7 @@ sources:
   - { tier: "T1", url: "https://arxiv.org/abs/2010.11929", label: "Dosovitskiy et al. — An Image is Worth 16x16 Words (ViT, 2020)" }
   - { tier: "T1", url: "https://arxiv.org/abs/2502.14786", label: "Tschannen et al. — SigLIP 2 (2025)" }
   - { tier: "T1", url: "https://arxiv.org/abs/2304.02643", label: "Kirillov et al. — Segment Anything (SAM, 2023)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2409.01704", label: "Wei et al. — GOT-OCR2.0: General OCR Theory (2024)" }
 ---
 import Invariant from '../../components/Invariant.astro';
 import Renewable from '../../components/Renewable.astro';
@@ -53,7 +54,12 @@ natural-image semantics, which is why a document-tuned encoder differs from a ph
 
 This is a systems constraint dressed as a modeling choice: the token budget sets the KV-cache the visual
 prefix occupies and the resolution at which fine print is still legible, and the two pull in opposite
-directions.
+directions. The budget is not reached by patchification alone: at patch size 16, a $1024^2$ page patchifies
+to $(1024/16)^2 = 4{,}096$ patch tokens, and the $256$ budget comes from a roughly $16\times$ convolutional
+compression stage *after* the ViT trunk — the GOT-OCR2.0-style high-compression encoder the contract names.
+Patchify, then compress. The SigLIP2 alternative at the same $256$ budget implies a much lower effective
+resolution — $256$ patch-16 tokens cover only a $256^2$ input — unless a pooling or compression stage is
+added; the SAM/GOT path is the one that natively reaches $1024^2 \to 256$.
 
 ## 3. The render contract: image only, no text layer
 
@@ -67,11 +73,13 @@ and inputs," so the visual input is as reproducible as R0's tokens.
 </Invariant>
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-The pilot's interface spike patchifies a rendered page into **16 visual tokens** through a tiny
-patch-embedding encoder (a stand-in for a frozen SAM/SigLIP2 encoder), proving the pixels→visual-tokens
-front end wires into the decoder on Tier-0 with no model downloads. Production encoders (frozen SAM-style or
-SigLIP2, a $256$-token budget) and the full render contract (pinned renderer, fixed DPI, no text-layer
-leakage) are specified in the R0/R3 contract and are the scale-tier build.
+The pilot's interface spike patchifies a $32^2$ "page" into **16 visual tokens** through a tiny
+patch-embedding encoder (a stand-in for a frozen SAM/SigLIP2 encoder) — but that page is a seeded random
+tensor standing in for the render contract's output, so what is proven is that the image→visual-tokens front
+end wires into the decoder on Tier-0 with no model downloads; the render contract itself (pypdfium2, DPI
+200) is unexercised, per the pilot deviations register (ADR 0002). Production encoders (frozen SAM-style or
+SigLIP2, a $256$-token budget) are the scale-tier build; rendering is not — the frozen contract's §2.4
+places it on Tier-0/CPU, and in the pilot it is simply unbuilt.
 </Renewable>
 
 **Where this goes.** Visual tokens are in the encoder's embedding space, not the decoder's. The next chapter
@@ -81,4 +89,5 @@ is the connector that bridges the two — and treats the visual tokens as a pref
   { tier: "T1", url: "https://arxiv.org/abs/2010.11929", label: "Dosovitskiy et al., ViT — images as patch-token sequences" },
   { tier: "T1", url: "https://arxiv.org/abs/2502.14786", label: "Tschannen et al., SigLIP 2 — a strong document-capable vision encoder" },
   { tier: "T1", url: "https://arxiv.org/abs/2304.02643", label: "Kirillov et al., SAM — the ViT-det encoder lineage used for high-resolution pages" },
+  { tier: "T1", url: "https://arxiv.org/abs/2409.01704", label: "Wei et al., GOT-OCR2.0 — the post-trunk compression stage behind the 1024²→256 budget" },
 ]} />

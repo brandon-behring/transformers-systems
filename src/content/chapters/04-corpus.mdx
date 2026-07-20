@@ -26,7 +26,7 @@ import SourceList from '../../components/SourceList.astro';
 **Where we are.** Part 0 gave us the discipline for numbers. Part 1 builds the thing those numbers
 describe: **R0**, the data-and-interface contract every later model consumes. It begins with the
 corpus — and the first lesson of production data work is that a corpus is not a pile of text you
-happen to have, but a *contract* you can restate, license, and re-derive byte-for-byte.
+happen to have, but a *contract* you can restate, license, and check byte-for-byte.
 
 ## 1. A corpus is a contract
 
@@ -41,23 +41,32 @@ clause and "trained on FineWeb" stops being a claim anyone can check.
 
 The license clause is the one engineers most often skip and lawyers most reliably catch. R0 draws
 from **FineWeb-Edu** (the education-filtered subset of FineWeb), released under **ODC-By-1.0** — an
-attribution license that permits derived works. Recording the license *in the manifest*, next to the
-bytes, means a downstream user of R1 or R3 inherits the provenance rather than having to reconstruct
-it.
+attribution license that permits derived works, with two caveats worth recording. ODC-By is a
+*database-level* license: it covers the curated collection, not the underlying page contents, whose
+rights it does not clear — the dataset card notes that CommonCrawl's Terms of Use also apply. And its
+§4.3 attaches an attribution-notice obligation to any *public* use of a derived work. Recording the
+license *in the manifest*, next to the bytes, means a downstream user of R1 or R3 inherits the
+provenance rather than having to reconstruct it.
 
 ## 2. Normalization is a decision, not a default
 
-R0's normalization is deliberately minimal and explicitly stated: strip surrounding whitespace,
-replace intra-document newlines with spaces (so one line is one document), and rely on UTF-8 to carry
-an implicit NFC form. Minimal is a choice with consequences — aggressive normalization (lowercasing,
-Unicode folding, punctuation stripping) discards signal a byte-level tokenizer could have used, while
-*no* normalization lets encoding noise masquerade as vocabulary. The point is not which policy is
+R0's normalization is deliberately minimal and explicitly stated: strip surrounding whitespace and
+replace intra-document newlines with spaces (so one line is one document) — and nothing more. There
+is **no Unicode normalization step**: the text is UTF-8-decoded as-is, and UTF-8 is an encoding, not
+a normalization form — it does not imply NFC. NFC remains a design-forward target per the pilot
+deviations register (ADR 0002). Minimal is a choice with consequences — aggressive normalization
+(lowercasing, Unicode folding, punctuation stripping) discards signal a byte-level tokenizer could
+have used, while *no* normalization lets encoding noise masquerade as vocabulary — a risk the
+as-built pipeline accepts. The point is not which policy is
 best but that the policy is **written down and checksummed**, so two runs of the pipeline cannot
 silently disagree on what "the text" was.
 
 Deduplication belongs to this clause too: near-duplicate documents inflate apparent data and let a
-model memorize instead of generalize. FineWeb-Edu is deduplicated upstream, so R0 inherits it; a
-corpus built from raw crawl would have to dedup explicitly and record that it did.
+model memorize instead of generalize. R0 runs **no deduplication of its own**: it inherits only
+FineWeb-Edu's upstream MinHash pass, which deduplicates *within* each CommonCrawl dump, so
+cross-dump duplicates can survive into the slice. The contract's build-time dedup is deferred, per
+the pilot deviations register (ADR 0002); a corpus built from raw crawl would have to dedup
+explicitly and record that it did.
 
 ## 3. Immutability by checksum
 
@@ -65,7 +74,10 @@ R0's build script assembles the corpus, then hashes it — and hashes the tokeni
 derived from it — into `r0/manifest.yml`. The manifest is the corpus's identity: change one document
 and the SHA-256 changes, and every artifact pinned to the old hash is now provably stale. This is the
 [numbers contract](/transformers-systems/chapters/03-numbers-contract/) applied to data instead of to
-FLOPs.
+FLOPs. The scope of that identity is worth stating precisely, per the pilot deviations register
+(ADR 0002): the build streams the head of `sample-10BT` with no dataset `revision=` pin, has no
+train/val/contamination-probe splits yet, and leaves the `datasets`/`tokenizers` libraries unpinned —
+so the recorded hashes make divergence on a re-run *detectable*, not the build *re-derivable*.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
 R0 assembles **8,000 FineWeb-Edu documents** (config `sample-10BT`, ODC-By-1.0) and records

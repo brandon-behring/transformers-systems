@@ -46,8 +46,11 @@ DP's whole communication budget, and an all-to-all of tokens is EP's.
 
 <Invariant note="ring algorithms and communication placement">
 A naïve all-reduce that sends every tensor to one rank is bottlenecked by that rank's link. The
-**ring all-reduce** instead passes shards around a ring so every link carries an equal share, making the
-cost independent of the number of ranks and bounded by the slowest link's bandwidth. This is why
+**ring all-reduce** instead passes shards around a ring so every link carries an equal share: each rank
+moves $2(N-1)/N$ tensor-sizes of data, approaching twice the tensor regardless of the rank count $N$, so
+the *bandwidth* term is nearly $N$-independent and bounded by the slowest link. The *latency* term is
+not — the ring's $2(N-1)$ sequential steps grow linearly with $N$, hence the tree algorithms NCCL pairs
+with rings. This is why
 *topology* governs placement: a collective's cost is set by the slowest link it crosses, so the
 **highest-frequency** communication must be mapped to the **fastest** links — tensor-parallel all-reduces
 on intra-node interconnect, data-parallel all-reduces tolerated on the slower inter-node fabric.
@@ -73,7 +76,7 @@ and cannot bottleneck the measurement — a deliberate simplification that a pro
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
 On Tier-0 the collectives run over **gloo** on a single device, so they exercise the *correctness* of the
-communication (broadcast verdict, sharded save/load) rather than fabric bandwidth. R0's fixed pre-packed
+communication (broadcast verdict, save/load of replicated state via DCP) rather than fabric bandwidth. R0's fixed pre-packed
 batches keep the input pipeline out of the critical path, so the measured tok/s reflects compute, not data
 starvation — real ring-collective bandwidth and topology-aware placement are scale-tier work.
 </Renewable>

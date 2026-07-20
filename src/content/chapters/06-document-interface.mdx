@@ -36,7 +36,9 @@ This chapter defines that interface; the systems that build and serve it are Par
 <Invariant note="layout as a sequence-modeling problem">
 A document's structure — its regions, tables, formulas, reading order — is a *tree*, but a decoder
 emits a *sequence*. The interface that unifies them is to serialize the tree into tokens: structural
-tags open and close nodes (`<table><tr><td>…</td></tr></table>`), and geometry, where needed, is
+tags open and close nodes (`<table><tr><td>…</td></tr></table>`) — whether a given tag is one atomic
+vocabulary entry or spelled out as ordinary text is a per-vocabulary decision, not part of the
+framing — and geometry, where needed, is
 emitted as **coordinate tokens** — real-valued positions quantized into vocabulary entries. Under this
 framing, "understand this page" and "predict the next token" are the *same* operation, so document
 understanding needs no separate detection head — only the reserved vocabulary and the decoder we
@@ -55,22 +57,27 @@ as tokens, never as a bespoke non-sequence output — which is precisely why one
 Because the structural tags live in the *same* tokenizer as the text tokens, the boundary between the
 text model and the document model is a **vocabulary partition**, not a model boundary. The text model
 R1 exercises the language tokens; the document model R3 exercises those *plus* the reserved
-`<page> <region> <table> <tr> <td> <formula>` tags. Sharing the namespace means R3 inherits R1's
+`<page> </page> <region> <table> <tr> <td> <formula> <eos_doc>` tags. Sharing the namespace means R3 inherits R1's
 learned text distribution for free and adds only the ability to place structure around it.
 </Invariant>
 
 Concretely, a document target is a token stream that interleaves content and structure — a `<page>`
-opens, `<region>`s and `<table>`s bracket their content, `<formula>` marks math, `<eos_doc>`
-terminates. The tree is reconstructed downstream by matching opens to closes and by containment; the
+opens and `</page>` closes, `<region>` and `<table>` introduce their content, `<formula>` marks math,
+`<eos_doc>` terminates. The tree is reconstructed downstream by matching opens to closes and by
+containment — with one as-built nuance: only `</page>` is a *reserved* closing token, so any other
+closer in the stream is ordinary byte-BPE text the decoder must spell out (ADR 0002). The
 decoder's job is only to emit the sequence. This "layout ≠ text, but both are tokens" separation is
-what lets the pilot overfit a single document end-to-end before any of the Part-7 machinery exists:
+what lets the pilot overfit a single document target end-to-end before any of the Part-7 machinery exists:
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-The VLM interface spike drives an image through a small vision encoder and projector into the R1-tiny
-decoder and trains it to emit a fixed document's exact markup token sequence — overfitting one page to
-validate the interface (shared tokenizer, structural tags, `<eos_doc>` termination) before scaling.
-It confirms the seam holds: the decoder emits the reserved document tokens with no architectural
-change beyond the input projection.
+The VLM interface spike drives a seeded random tensor (a stand-in for a rendered page) through a
+small vision encoder and projector into the R1-tiny decoder and overfits one (image, markup) pair
+until **fixed-length** greedy decoding reproduces the exact target sequence. What it validates is the
+shared tokenizer and the structural-tag round-trip: the target mixes reserved control ids (`<page>`,
+`<formula>`, `</page>`) with a text-encoded lookalike closer (`</formula>`), and the decoder emits
+both with no architectural change beyond the input projection. `<eos_doc>` termination logic does not
+exist in the spike — generation runs a fixed number of steps — per the pilot deviations register
+(ADR 0002).
 </Renewable>
 
 ## 3. What "done" means: tasks and benchmarks
@@ -84,15 +91,21 @@ impression.
 
 <Versioned as_of="2026-07-17" version="torch==2.13.0">
 ```python
-# A document target is just tokens from the shared vocabulary:
-target = "<page><region>Invoice<table><tr><td>Total<td>$42</tr></table></region><eos_doc>"
+# A document target is just tokens from the shared vocabulary. Every tag below is
+# an atomic reserved id; </page> is the only reserved closer, so inner nodes end by
+# containment. The cell reads "42", not "$42" — a lone $ would violate the grammar's
+# balanced $…$ math-delimiter rule.
+target = "<page><region>Invoice<table><tr><td>Total<td>42</page><eos_doc>"
 ids = tok.encode(target).ids     # same tokenizer as the text model — no re-tokenization
 ```
 </Versioned>
 
-**Where this goes.** R0 is now complete: a licensed corpus, a rebuildable tokenizer, and a document
-interface that shares both. The last Part-1 chapter turns tokens into the fixed-shape batches training
-consumes, closing the data contract.
+**Where this goes.** The *text side* of R0 is now in place: a licensed corpus, a rebuildable
+tokenizer, and a reserved document-control vocabulary shared across both models. The document side
+remains design-forward per the pilot deviations register (ADR 0002): the train/val splits and
+contamination probe, the document corpus itself, the §2.4 render contract, the §2.5 output grammar,
+and the §2.6 image-token budget. The last Part-1 chapter turns tokens into the fixed-shape batches
+training consumes, closing the text data contract.
 
 <SourceList sources={[
   { tier: "T1", url: "https://arxiv.org/abs/2109.10852", label: "Chen et al., Pix2Seq — detection as next-token prediction over quantized coordinates" },

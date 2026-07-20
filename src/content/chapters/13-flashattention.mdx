@@ -49,47 +49,57 @@ FlashAttention loads a block of queries into fast on-chip memory and streams blo
 past it, updating the running max, normalizer, and output accumulator by the online-softmax recurrence.
 The full score matrix is never materialized — only the small per-block tiles and the running state live
 in on-chip SRAM. Because the recurrence is *exact*, the result is exact attention; the win is entirely
-in the IO the tiling avoids. Causality is a loop bound: a query block only streams key blocks up to its
-own position.
+in the IO the tiling avoids. Causality is a loop bound plus a mask: a query block streams key blocks
+only up to its own position, and the diagonal tile — where query and key positions interleave — is
+masked elementwise before the softmax update.
 </Invariant>
 
 The kernel is thus the online-softmax identity written against the memory hierarchy: registers and SRAM
-for the running state, a single pass over K and V from memory, one write of the output. In the lab this
-is a Triton kernel — a query block per program, the running `(m_i, l_i, acc)` in registers, `sm_scale`
-$=1/\sqrt{d}$, and a causal loop bound.
+for the running state, one streaming pass over K and V *per query block* — each program re-streams the
+K/V blocks it needs, so the win is *reduced* HBM traffic, total $\Theta(N^2 d^2/M)$ for SRAM size $M$,
+not a single global pass — and one write of the output. In the lab this is a Triton kernel — a query
+block per program, the running `(m_i, l_i, acc)` in registers, `sm_scale` $=1/\sqrt{d}$, and causality
+as a loop bound plus a masked diagonal tile.
 
 ## 3. Correctness before speed — and why, on this hardware
 
 <Invariant note="the invariant is parity, not throughput">
-The lab kernel's contract is **correctness parity**, not FA2/FA3 speed. On a Turing (sm_75) card without
-the newer tensor-core and async-copy features, a hand-written kernel will not beat the vendor library on
-wall-clock — so pinning it to speed would be dishonest. What *is* portable and honest is the invariant:
-the kernel's output must equal a reference attention to floating-point tolerance. Real FA2/FA3 throughput
-and FP8 paths are a scale-tier concern, deferred by design.
+The lab kernel's contract is **correctness parity**, not speed: the kernel's output must equal a
+reference attention within a stated floating-point tolerance. A speed claim is honest only on hardware
+whose fast paths the kernel actually uses; a parity claim is portable to any hardware that can run the
+kernel at all.
 </Invariant>
 
 This is Part 0's methodology applied to a kernel: quote the metric the hardware can honestly support
-(parity), not the one it cannot (speed).
+(parity), not the one it cannot (speed). The tier scoping is concrete: Turing (sm_75) *has* tensor
+cores, but Triton will not emit tensor-core code for this kernel on sm_75, and the async-copy
+pipelining FA2/FA3 build on is Ampere+ — so on the Tier-0 card a hand-written kernel will not beat the
+vendor library on wall-clock, and pinning it to speed would be dishonest. Real FA2/FA3 throughput and
+FP8 paths are a scale-tier concern, deferred by design.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
 The Triton forward kernel (`kernels/flash_attn.py`, tiled online-softmax, causal, block $64\times 64$)
-matches PyTorch's fused attention to $\sim 10^{-7}$ on the RTX 2070 SUPER — exact attention, no score
-matrix materialized. The parity test *is* the kernel's acceptance gate; throughput is explicitly not
-claimed on this hardware.
+matches `F.scaled_dot_product_attention` on standalone random tensors (three shapes) on the RTX 2070
+SUPER, accepted on `torch.allclose` with `atol=rtol=2e-2` — a deliberately loose fp32 envelope; the
+test prints the observed max error, but no artifact records it. No score matrix is materialized. The
+parity test *is* the kernel's acceptance gate — its evidence is the script's own exit status; no
+benchmark scenario records the run (see the pilot deviations register, ADR 0002). Throughput is
+explicitly not claimed on this hardware.
 </Renewable>
 
 <Versioned as_of="2026-07-17" version="torch==2.13.0 · triton==3.7.1">
 ```python
 # online-softmax recurrence, per K/V block, inside the Triton kernel:
-m_new = tl.maximum(m_i, tl.max(qk, 1))       # running max
+m_new = tl.maximum(m_i, tl.max(qk, 1))        # running max
+p     = tl.exp(qk - m_new[:, None])           # block probabilities (unnormalized)
 alpha = tl.exp(m_i - m_new)                   # rescale prior state
 l_i   = l_i * alpha + tl.sum(p, 1)            # running normalizer
-acc   = acc * alpha[:, None] + tl.dot(p, v)   # running output — score matrix never stored
+acc   = acc * alpha[:, None] + tl.dot(p.to(v.dtype), v)  # running output — score matrix never stored
 ```
 </Versioned>
 
-**Where this goes.** With a correct attention kernel, the model can train. The next chapter assembles the
-training loop around it — optimizer, mixed precision, and the checkpoints the resume gate will replay.
+**Where this goes.** With attention correctness pinned, the model can train. The next chapter assembles
+the training loop — optimizer, the precision recipe, and the checkpoints the resume gate will replay.
 
 <SourceList sources={[
   { tier: "T1", url: "https://arxiv.org/abs/2205.14135", label: "Dao et al., FlashAttention — exact attention as an IO-aware tiled kernel" },

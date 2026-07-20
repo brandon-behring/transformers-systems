@@ -25,7 +25,8 @@ import SourceList from '../../components/SourceList.astro';
 
 # The R1 Architecture: A Modern Decoder, Component by Component
 
-**Where we are.** Scaling laws fixed R1-tiny's *size*; this chapter fixes its *shape*. A modern decoder
+**Where we are.** The last chapter located R1-tiny's *size* — a pilot-scoping choice, deliberately off
+the compute-optimal frontier; this chapter fixes its *shape*. A modern decoder
 is the 2017 transformer with four specific substitutions, each of which buys either stability,
 generalization, or serving efficiency. We state each exactly and point at its line in the from-scratch
 module, so the [parameter ledger](/transformers-systems/chapters/01-resource-accounting/) and the code
@@ -63,8 +64,9 @@ R1-tiny fixes $\varepsilon = 10^{-5}$.
 Rotary position embedding encodes absolute position by *rotating* each pair of query/key dimensions by
 an angle proportional to the position, using a fixed geometric spectrum of frequencies. Because a dot
 product between two rotated vectors depends only on the *difference* of their angles, attention scores
-become a function of *relative* position — with no learned position table and a natural path to
-extrapolating beyond the trained context. R1-tiny uses base $\theta = 10{,}000$.
+become a function of *relative* position — with no learned position table. Extrapolation is not free:
+vanilla RoPE degrades beyond the trained context, and practical context extension rescales the rotary
+spectrum (position-interpolation and NTK/YaRN-style methods). R1-tiny uses base $\theta = 10{,}000$.
 </Invariant>
 
 RoPE is applied to $q$ and $k$ *after* their projections and *before* the attention product, so it
@@ -81,7 +83,8 @@ inner width is shrunk (to $\approx \tfrac{8}{3} d_\text{model}$) to keep the par
 </Invariant>
 
 This is the ledger's $P_\text{ffn} = 3\,d_\text{model}\,d_\text{ff}$: three matrices, not two, and
-$d_\text{ff}=704$ chosen so the block matches a $4\times$ plain MLP in parameters.
+$d_\text{ff}=704$ — $\tfrac{8}{3}d_\text{model}$ rounded up to a multiple of 64 — so the block
+*approximately* matches a $4\times$ plain MLP in parameters ($540{,}672$ vs $524{,}288$, $+3.1\%$).
 
 ## 5. GQA: sharing keys and values across heads
 
@@ -100,8 +103,9 @@ training-time decision paying an inference-time dividend.
 R1-tiny is implemented from scratch (`model/r1.py`) with exactly these four components — RMSNorm
 ($\varepsilon=10^{-5}$), RoPE ($\theta=10{,}000$), SwiGLU ($d_\text{ff}=704$), GQA ($8$ query / $2$ KV
 heads) — and a tied output projection. Its parameter count matches the fixture's predicted
-$6{,}327{,}552$ to the parameter, and it overfits a small batch to near-zero loss, confirming the
-forward and backward paths are correct.
+$6{,}327{,}552$ to the parameter, and its module test drives 60 AdamW steps on a fixed pair of random
+input/target batches and asserts the loss at least halves — confirming the forward and backward paths
+are wired correctly.
 </Renewable>
 
 <Versioned as_of="2026-07-17" version="torch==2.13.0">
@@ -112,7 +116,9 @@ class SwiGLU(nn.Module):                     # three matrices: gate, up, down
 
 # GQA: expand n_kv shared KV heads to n_heads groups, then fused causal attention
 k = self.k(x).view(b, s, self.n_kv, self.hd).transpose(1, 2)
-out = F.scaled_dot_product_attention(q, k_expanded, v_expanded, is_causal=True)
+rep = self.n_heads // self.n_kv
+k, v = k.repeat_interleave(rep, dim=1), v.repeat_interleave(rep, dim=1)
+out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
 logits = F.linear(self.norm(x), self.embed.weight)     # output tied to input embedding
 ```
 </Versioned>

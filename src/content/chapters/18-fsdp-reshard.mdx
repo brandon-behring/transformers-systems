@@ -24,10 +24,10 @@ import SourceList from '../../components/SourceList.astro';
 # FSDP2 and Distributed Checkpoint: Resharding Across World Size
 
 **Where we are.** The [parallelism ladder](/transformers-systems/chapters/17-parallelism-ladder/) named
-sharded data parallelism as the rung the pilot can prove. This chapter builds it with FSDP2 and pins the
-hardest correctness property distributed training adds: a checkpoint written under one device count must
-restore under a *different* one. Gate A proved same-topology resume; Gate B proves resume across
-topologies.
+sharded data parallelism as the rung nearest the pilot's reach. This chapter teaches FSDP2's sharding
+model and pins the hardest correctness property distributed training adds: a checkpoint written under one
+device count must restore under a *different* one. Gate A proved same-topology resume; Gate B proves
+resume across topologies.
 
 ## 1. FSDP shards the model state across the data-parallel group
 
@@ -65,15 +65,17 @@ changing the node count means restarting from scratch.
 On a single-GPU Tier-0 machine the model is *replicated* across gloo/CPU ranks, so the gate pins DCP's
 world-size-agnostic *load* of replicated state plus optimizer — the serialization-and-redistribution
 contract — but not the genuine partition-metadata redistribution of truly sharded parameters, which needs
-real multi-GPU hardware. The verdict is broadcast so **every** rank exits nonzero on failure, closing the
-silent-success hole where rank 0 passes and other ranks hang.
+real multi-GPU hardware. The verifying rank's verdict is broadcast so **every** rank exits nonzero on
+failure, closing the silent-success hole in which rank 0 detects the failure but the other ranks exit
+zero.
 </Invariant>
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-Gate B holds on the pilot: a DCP checkpoint written by a **world size 2** run loads under **world size 1**
-with exact model integrity *and* exact optimizer-moment integrity, verified against a reference and
-broadcast so all ranks share the verdict. Genuinely sharded FSDP2 resharding is designed-for and deferred
-to the scale tier.
+Gate B holds on the pilot: a DCP checkpoint of **replicated** plain-module state written by a
+**world size 2** run loads under **world size 1** with exact model integrity *and* exact
+optimizer-moment integrity (`torch.equal`), verified against a reference and broadcast so all ranks
+share the verdict. Genuinely sharded FSDP2 resharding is designed-for and deferred to the scale tier,
+per the pilot deviations register (ADR 0002).
 </Renewable>
 
 <Versioned as_of="2026-07-17" version="torch==2.13.0">
@@ -87,9 +89,9 @@ set_state_dict(m, opt, model_state_dict=msd, optim_state_dict=osd)
 ```
 </Versioned>
 
-**Where this goes.** The model now shards and reshards correctly. The last Part-4 chapter zooms out to
-the fabric all this communication runs on — the collective operations and the topology that decide
-whether the parallelism plan is fast or merely correct.
+**Where this goes.** The checkpoint contract now survives a change of world size. The last Part-4
+chapter zooms out to the fabric all this communication runs on — the collective operations and the
+topology that decide whether the parallelism plan is fast or merely correct.
 
 <SourceList sources={[
   { tier: "T1", url: "https://arxiv.org/abs/2304.11277", label: "Zhao et al., PyTorch FSDP — fully sharded data parallel" },

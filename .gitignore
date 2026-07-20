@@ -12,6 +12,10 @@ src/data/*.json
 # Pagefind index
 public/pagefind/
 
+# Local reference cache — cite-don't-copy, never committed (CS336 lecture
+# repos + transcripts; the rolling stanford-cs336/lectures repo has NO license)
+reference-material/
+
 # OS / editor
 .DS_Store
 *.swp

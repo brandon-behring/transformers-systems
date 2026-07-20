@@ -10,7 +10,7 @@ concept_ids: [paged-attention, physical-blocks, block-table, memory-fragmentatio
 description: "The KV-cache memory problem is fragmentation, and the fix is virtual memory: fixed-size physical blocks, a per-sequence block table mapping logical positions to non-contiguous blocks, and an exactness invariant that paging changes storage, not output."
 scenario_ids: [r1-tiny-train]
 code_path: "serve/paged_kv.py"
-tests_path: "tests/test_r1_tiny_fixture.py"
+tests_path: "tests/test_paged_kv.py"
 measured_on: "Tier-0 RTX 2070 SUPER"
 sources:
   - { tier: "T1", url: "https://arxiv.org/abs/2309.06180", label: "Kwon et al. — Efficient Memory Management for LLM Serving with PagedAttention (vLLM, 2023)" }
@@ -24,9 +24,10 @@ import SourceList from '../../components/SourceList.astro';
 # Paged KV-Cache: A Block Pool and a Block Table
 
 **Where we are.** Serving many requests means many KV-caches, each growing unpredictably. The
-[prefill/decode](/transformers-systems/chapters/21-prefill-decode/) split showed the cache is the decode
-bottleneck; this chapter shows how to *manage* it without wasting most of it — by borrowing virtual memory
-from operating systems.
+[prefill/decode](/transformers-systems/chapters/21-prefill-decode/) split showed decode streams the weights
+plus a cache that grows with context and concurrency — the one memory term a server must actively manage;
+this chapter shows how to *manage* it without wasting most of it — by borrowing virtual memory from
+operating systems.
 
 ## 1. The problem is fragmentation
 
@@ -57,18 +58,21 @@ pool-allocation problem, and pool allocation does not fragment.
 ## 3. Paging must not change the answer
 
 <Invariant note="the exactness invariant">
-Paging is a memory-layout optimization, so it must produce *bit-identical* output to a contiguous or
-full-recompute implementation. The acceptance test is exactly that: greedy generation through the paged
-cache must match greedy generation without it, token for token. If the block table's logical-to-physical
-mapping is correct, attention reads the same keys and values in the same order — the physical scattering is
-invisible to the math.
+Paging is a memory-layout optimization, so it must not change the *attention math*: if the block table's
+logical-to-physical mapping is correct, attention reads the same keys and values in the same logical order,
+and the physical scattering is invisible to the result. The acceptance gate states this at the level real
+kernels can promise — greedy generation through the paged cache must match a full-recompute reference,
+token for token. Bitwise-identical *logits* are not promised: reduction order may shift the last ulp, but
+the greedy token IDs must not move.
 </Invariant>
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
 The lab's `PagedKVCache` holds K/V in fixed $16$-token physical blocks from a pool of $1024$, with a
 per-sequence block table mapping logical positions to physical slots; prefill reserves and fills blocks for
-the prompt, decode claims one more as needed. Its test pins the invariant: **paged incremental decode is
-bit-identical to full-recompute greedy generation** — the paging is provably invisible to the output.
+the prompt, decode claims one more as needed. `tests/test_paged_kv.py` wraps the parity gate: **paged
+incremental decode must reproduce the full-recompute greedy token IDs**. The test needs torch, so it runs
+on Tier-0 and self-skips loudly on the torch-less hosted CI lane (the pilot deviations register, ADR 0002,
+deviation 7).
 </Renewable>
 
 <Versioned as_of="2026-07-17" version="torch==2.13.0">

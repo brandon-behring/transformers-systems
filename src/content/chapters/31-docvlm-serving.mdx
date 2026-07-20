@@ -7,7 +7,7 @@ freshness: reference
 volatility: architectural-pattern
 tags: [document-ai, serving, constrained-decoding, grounding, r3]
 concept_ids: [constrained-decoding, evidence-localization, high-res-tiling, deliverables-matrix]
-description: "Serving the document model with a guarantee: a grammar that makes malformed markup impossible, evidence localization that ties every claim to a region, high-resolution tiling for dense pages — and the deliverables matrix that closes the guide's one-reference-model arc."
+description: "Serving the document model: grammar-constrained decoding backed by a post-hoc validator and repair policy, evidence localization that ties every claim to a region, high-resolution tiling for dense pages — and the deliverables matrix that closes the guide's one-reference-model arc."
 scenario_ids: [r1-tiny-train]
 code_path: "vlm/spike.py"
 measured_on: "Tier-0 RTX 2070 SUPER"
@@ -28,15 +28,17 @@ markup. This final chapter serves it — with the serving stack of Part 5, plus 
 guarantees — and then closes the guide by showing that R3 is not a new system but the whole book's machinery,
 reused.
 
-## 1. Constrained decoding makes malformed output impossible
+## 1. Constrained decoding enforces the grammar — with a validator behind it
 
 <Invariant note="a grammar over the output vocabulary">
 Structured markup has a grammar — tags open and close, tables nest rows and cells — and free-form decoding
 can violate it, producing an unparseable answer. **Constrained decoding** enforces the grammar at generation
-time: at each step it masks the logits to only the tokens the grammar permits next, so the output is
-*guaranteed* well-formed by construction. This turns "the model usually produces valid markup" into "the
-model cannot produce invalid markup" — a correctness guarantee moved from hope to mechanism, at the cost of a
-grammar-mask computation per token.
+time: at each step it masks the logits to only the tokens the grammar permits next, so every emitted token
+is grammar-valid at that step. That is not the whole guarantee: residual invalidity survives per-step
+masking — a token-budget truncation mid-structure leaves tags unclosed — which is why the contract (§2.5)
+pairs the grammar with a **post-hoc validator and repair policy**. Together they turn "the model usually
+produces valid markup" into a two-layer mechanism — prevent per step, then validate and repair — at the cost
+of a grammar-mask computation per token.
 </Invariant>
 
 Constrained decoding composes with the paged KV-cache and continuous batching of Part 5 unchanged; it is an
@@ -50,7 +52,9 @@ A document answer that cannot be traced to *where* on the page it came from is u
 box or a coordinate token sequence. This is the coordinate-token interface from Part 1 put to work: geometry
 is emitted as tokens, so a grounded answer is one token stream carrying both the *what* and the *where*.
 Grounding is what lets the eval-as-CI metric check not just that an answer is right but that it is
-*supported* — the difference between an OCR system and a citable one.
+*supported* — the difference between an OCR system and a citable one. One gap is named, not hidden:
+coordinate tokens need vocabulary entries and grammar productions that the frozen §2.3 vocabulary and §2.5
+grammar do not yet reserve — a design gap recorded in the pilot deviations register (ADR 0002).
 </Invariant>
 
 ## 3. High-resolution tiling for dense pages
@@ -64,7 +68,8 @@ Part 5: tiling lengthens the compute-bound prefill to protect the accuracy of th
 </Invariant>
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-The pilot serves the doc-VLM through the same generation path as R1, proving the interface end to end;
+The pilot generates from the doc-VLM with the spike's own full-recompute greedy loop — no KV-cache, not the
+Part-5 serving stack — proving the interface end to end;
 constrained decoding (a grammar over the document vocabulary), evidence localization (coordinate tokens), and
 high-resolution tiling are specified as the production serving profile — a Q(·) projection over R3 — and are
 the scale-tier build. Each is a documented extension of a Part-5 mechanism, not a new stack.
@@ -76,15 +81,17 @@ the scale-tier build. Each is a documented extension of a Part-5 mechanism, not 
 R3 is the proof of the guide's thesis: a document-AI system is not a separate discipline but the text spine
 reused. It shares R0's tokenizer, R1's decoder and architecture, Part 3's training loop and kernels, Part 4's
 sharding, Part 5's serving and paged cache, and Part 6's alignment and eval-as-CI — adding only an encoder, a
-connector, and a grammar. Every number traces to a runnable fixture; every claim to a strict-live source; and
+connector, and a grammar. The contracted metrics trace to runnable fixtures under the numbers contract; the
+design-forward content — Part 7 included — traces to public sources; and
 one reference-model family runs unbroken from a parameter count to a served, grounded document parse.
 </Invariant>
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
 The full arc holds on one 8 GB card: R1-tiny (6,327,552 params, predicted and measured to the byte) trains on
 R0 tokens, computes exact attention through a Triton kernel, resumes bit-for-bit, reshards across world size,
-serves through a paged KV-cache with output parity, and — as R3 — turns a page image into exact document
-markup. What exceeds 8 GB (7B decoders, multi-GPU throughput, real-corpus training) is named as the scale
+serves through a paged KV-cache with output parity, and — as R3 — turns a seeded stand-in for a page image
+into exact document markup (the render contract itself is unexercised; ADR 0002). What exceeds 8 GB (7B
+decoders, multi-GPU throughput, real-corpus training) is named as the scale
 tier, designed-for and not overclaimed.
 </Renewable>
 

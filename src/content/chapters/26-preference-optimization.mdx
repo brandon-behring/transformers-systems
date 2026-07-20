@@ -47,13 +47,15 @@ the reward model, and (in PPO) a value model — so it is memory- and orchestrat
 Direct Preference Optimization removes the separate reward model and RL loop. Using the insight that the
 optimal RLHF policy has a closed-form relationship to the reward, DPO rewrites the objective as a *supervised*
 classification loss directly on preference pairs — increasing the log-probability margin between the
-preferred and dispreferred response, regularized toward the reference model. One model, one supervised
-loss, no sampling loop — much simpler to run, at some cost in the flexibility a separate reward model
-allows.
+preferred and dispreferred response, regularized toward the reference model. Two resident models, one
+supervised loss, no sampling loop: the loss needs the frozen reference's log-probabilities alongside the
+policy's, so the reference stays resident — unless its log-probs are precomputed offline, which cuts
+residency to one. Much simpler to run, at some cost in the flexibility a separate reward model allows.
 </Invariant>
 
 DPO is the pragmatic default for many alignment pipelines precisely because it collapses the four-model
-RLHF system into something that looks like SFT with a preference-shaped loss.
+RLHF system to two — no reward model, no value model, no sampling loop — leaving something that looks like
+SFT with a preference-shaped loss.
 
 ## 3. RLVR: replace the judge with a checker
 
@@ -61,13 +63,16 @@ RLHF system into something that looks like SFT with a preference-shaped loss.
 When correctness is *checkable* — a math answer, a unit test, a document parse that either matches the
 ground-truth structure or does not — the reward model can be replaced by a **verifier**: a program that
 returns a reward with no human and no learned judge. This is RL from verifiable rewards. It removes the
-reward model's noise and reward-hacking surface entirely, and it is exactly the regime a document-AI model
-lives in: a produced markup is scored against ground truth by a metric, not by a preference. The reward is
-the metric from the eval-as-CI chapter.
+*learned* reward model's noise and hackable parameters, but not the proxy problem itself: a verifier is
+still a proxy for the quality we mean (test suites have gaps, string matching is brittle), and Goodhart
+pressure survives — the policy optimizes what the checker checks. It is exactly the regime a document-AI
+model lives in: a produced markup is scored against ground truth by a metric, not by a preference. The
+reward is the metric from the eval-as-CI chapter.
 </Invariant>
 
 RLVR is why the document model's evaluation and its *training signal* converge: the same structural metric
-that selects checkpoints can serve as the verifiable reward.
+that selects checkpoints can serve as the verifiable reward — subject to the same Goodhart caveat, since a
+metric under optimization pressure will have its gaps found.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
 Preference optimization is **design-forward** on Tier-0 — the pilot proves the pretraining loop these

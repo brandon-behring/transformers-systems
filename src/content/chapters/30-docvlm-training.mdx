@@ -10,7 +10,6 @@ concept_ids: [llava-staged-training, markup-supervision, interface-spike, tier-b
 description: "Training a page-to-markup model: supervising the decoder on the document-control vocabulary, why overfitting one document is the right first proof of the interface, and the exact boundary where the pilot hands off to the scale tier."
 scenario_ids: [r1-tiny-train]
 code_path: "vlm/spike.py"
-tests_path: "tests/test_r1_tiny_fixture.py"
 measured_on: "Tier-0 RTX 2070 SUPER"
 sources:
   - { tier: "T1", url: "https://arxiv.org/abs/2308.13418", label: "Blecher et al. — Nougat: Neural Optical Understanding for Academic Documents (2023)" }
@@ -35,8 +34,9 @@ the document-control vocabulary R0 reserved.
 The training target for a page is its ground-truth markup: a token sequence over the *same* vocabulary as
 text, interleaving content with the reserved structural tags (`<page> <region> <table> <tr> <td> <formula>`,
 terminated by `<eos_doc>`). Supervision is teacher-forced next-token prediction on that sequence, conditioned
-on the visual prefix — identical to R1's training loss, differing only in what conditions it. So the entire
-Part-3 training machinery (optimizer, mixed precision, deterministic resume) transfers with no change; only
+on the visual prefix — identical to R1's training loss, differing only in what conditions it. So the Part-3
+training machinery transfers: the optimizer and the deterministic-resume gate as run, and the mixed-precision
+recipe as the same scale-tier design target it is for R1 (the pilot trains in pure fp32 — ADR 0002); only
 the data — (image, markup) pairs — is new.
 </Invariant>
 
@@ -58,8 +58,11 @@ parity test is to a kernel: the smallest experiment that pins correctness of the
 ## 3. The tier boundary, stated honestly
 
 <Invariant note="what the pilot proves and what forces the scale tier">
-The single-GPU pilot proves the interface — a frozen-encoder → projector → small-decoder path overfitting one
-document to exact markup. What it *cannot* do, and does not pretend to, is the production build: a 7B-class
+The single-GPU pilot proves the *interface* — tokenizer sharing, projector wiring, an exact-markup overfit —
+with a jointly trained toy stack: encoder, projector, and decoder all update, nothing is frozen (the pilot
+deviations register, ADR 0002). The frozen-encoder staged recipe of the previous chapter — LLaVA stage-1
+style — is the contract's production design, not what ran. What the pilot *cannot* do, and does not
+pretend to, is the production build: a 7B-class
 decoder (tens of GB), multi-page contexts of thousands of tokens, high-resolution tiling, batched training,
 and a real annotated document corpus. Those are the scale tier, designed-for but not built on 8 GB. Naming
 the boundary is itself a systems deliverable: it says exactly which claims are measured and which are
@@ -67,19 +70,22 @@ specified.
 </Invariant>
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-The interface spike overfits one page whose target markup is
-`<page><formula>E=mc^2</formula></page>`: training drives the loss down until **greedy decoding reproduces
-the exact markup token sequence**, confirming pixels → encoder → projector → R1-tiny decoder → valid
-document markup end to end. The exact-match assertion is the acceptance gate; corpus-scale training, high-res
-tiling, and a 7B decoder are the specified scale-tier extension.
+The interface spike overfits one (image, markup) pair whose target markup is
+`<page><formula>E=mc^2</formula></page>` — and whose "image" is a seeded random tensor standing in for the
+render contract's output (the contract's §2.4 renderer is unexercised; ADR 0002): training drives the loss
+down until **greedy decoding reproduces the exact markup token sequence**, confirming image tensor → encoder
+→ projector → R1-tiny decoder → valid document markup end to end. The gate is the spike's own exit code —
+`vlm/spike.py` exits 0 iff greedy decode equals the target markup; there is no separate test file.
+Corpus-scale training, high-res tiling, and a 7B decoder are the specified scale-tier extension.
 </Renewable>
 
 <Versioned as_of="2026-07-17" version="torch==2.13.0">
 ```python
 markup   = tok.encode("<page><formula>E=mc^2</formula></page>").ids   # target: shared doc vocab
 text_in  = [bos] + markup[:-1]                    # teacher forcing
-loss     = docvlm(page_image, text_in, markup)    # next-token loss over the reserved vocabulary
-assert docvlm.generate(page_image, bos, len(markup)) == markup        # greedy == exact markup
+loss     = docvlm(page, text_in, markup)          # next-token loss over the reserved vocabulary
+exact    = docvlm.generate(page, bos, len(markup)) == markup          # greedy == exact markup
+sys.exit(0 if exact else 1)                       # the spike's gate is its exit code
 ```
 </Versioned>
 

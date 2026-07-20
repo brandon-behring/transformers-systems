@@ -95,8 +95,10 @@ predicted ledger:
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
 Training R1-tiny on real R0 tokens at batch 8: **10 untimed warm-up steps**, then a
-device-synchronized window of **190 timed steps**, yields $\approx\mathbf{82{,}000}$ tok/s and a loss
-descending $9.07 \to 6.26$. MFU is reported as *n/a* — this is a correctness pilot, and quoting a
+device-synchronized window of **190 timed steps**, yields $\approx\mathbf{81{,}000}$ tok/s
+(81,029 tok/s in the report artifact) and a loss descending $9.07 \to 6.26$. By §3's own standard
+this is a location without a spread — a **single run, no distribution** — so quote it as provisional
+until re-measured across runs. MFU is reported as *n/a* — this is a correctness pilot, and quoting a
 utilization ratio we have not carefully attributed would violate §4. The measured train-state
 (101.2 MB) matches the predicted ledger, closing the predict-then-measure loop.
 </Renewable>

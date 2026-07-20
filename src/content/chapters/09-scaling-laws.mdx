@@ -7,7 +7,7 @@ freshness: theoretical
 volatility: architectural-pattern
 tags: [scaling-laws, compute-optimal, design, chinchilla]
 concept_ids: [scaling-law-fit, compute-optimal-allocation, chinchilla-ratio, inference-aware-scaling, budget-to-shape]
-description: "How a compute budget becomes a model shape: the separable loss fit, the compute-optimal allocation of parameters versus tokens, and why a deployment-aware objective — or an 8 GB card — deliberately departs from it."
+description: "How a compute budget becomes a model shape: the separable loss fit, the compute-optimal allocation of parameters versus tokens, and why a deployment-aware objective — or a correctness-first pilot — deliberately departs from it."
 scenario_ids: [r1-tiny-train]
 measured_on: "Tier-0 RTX 2070 SUPER"
 sources:
@@ -74,23 +74,32 @@ trade explicit. Over-training here means *more tokens at fixed model size than t
 selects*, not training past convergence.
 </Invariant>
 
-R1-tiny departs from compute-optimal for a blunter reason, and naming it is the point of this chapter:
-its shape is set by a **hardware constraint**, not a scaling optimum. At $6.3\text{M}$ parameters it is
-far smaller than any compute-optimal target, because the binding constraint is that its training state
-plus activations must fit an 8 GB card (the [memory ledger](/transformers-systems/chapters/01-resource-accounting/)).
-Scaling laws are still the instrument — they tell us *exactly how far* R1-tiny sits from optimal, and in
-which direction a production sibling would move.
+R1-tiny departs from compute-optimal for a blunter reason, and naming it honestly is the point of this
+chapter: its size is a **pilot-scoping choice**, not a memory bind and not a scaling optimum. At
+$6.3\text{M}$ parameters the 8 GB card is nowhere near binding — the fp32 train state is 101.2 MB and
+the measured peak is 1.17 GB at batch size 8 (the [memory ledger](/transformers-systems/chapters/01-resource-accounting/));
+at 16 B/param the card would bind only around hundreds of millions of parameters. The size buys fast
+iteration and a correctness scope on one card. Scaling laws are still the instrument — not because they
+set the size, but because they *locate* the choice: exactly how far off the compute-optimal frontier
+the pilot sits, and in which direction a production sibling would move.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-R1-tiny is a deliberately **under-parameterized pilot**: sized by the Tier-0 memory budget, not by a
-compute-optimal fit. The training run's loss descends monotonically ($9.07 \to 6.26$) — the model is
-learning, but it is nowhere near the data-saturated regime a compute-optimal model targets, exactly as
-the ledger predicts for its size.
+Locating the pilot on the frontier: the measured run spent $D \approx 0.82\text{M}$ tokens
+(batch $8$ × context $512$ × $200$ steps), so $C \approx 3.9 \times 10^{13}$ training FLOPs at the contracted
+47,382,528 FLOPs/token. On the Chinchilla contour $C = 120N^2$ that budget is compute-optimal near
+$N_\text{opt} \approx 0.57\text{M}$ parameters — so R1-tiny, measured against its total parameter
+count of 6.33M, is roughly $11\times$ **over-parameterized** for the compute it actually spent, and at
+$D/N \approx 0.13$ tokens per parameter it is $\sim 150\times$ under-trained against the
+$\sim 20$ tokens/param rule. That is the frontier locating a deliberate choice, not a defect: the
+pilot buys correctness per engineer-hour, not loss per FLOP. Its loss fell from 9.07 at the first step
+to a trailing-10 mean of 6.26 — the model is learning, and it is nowhere near the data-saturated
+regime a compute-optimal model targets.
 </Renewable>
 
-**Where this goes.** Scaling laws fixed the *size*; the next chapter fixes the *shape at the layer
-level* — the specific normalization, positional encoding, activation, and attention grouping that make
-R1 a modern decoder rather than a 2017 one.
+**Where this goes.** Scaling laws gave us the *method* — a budget becomes a shape — and an honest fix
+on where the pilot's scoping choice sits relative to that method; the next chapter fixes the *shape at
+the layer level* — the specific normalization, positional encoding, activation, and attention grouping
+that make R1 a modern decoder rather than a 2017 one.
 
 <SourceList sources={[
   { tier: "T1", url: "https://arxiv.org/abs/2001.08361", label: "Kaplan et al. — power-law scaling across model size, data, and compute" },

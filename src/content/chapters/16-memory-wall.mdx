@@ -47,9 +47,12 @@ memory, not compute — the opposite of the intuition that "a bigger GPU is a fa
 Activation (gradient) checkpointing stores only a subset of activations on the forward pass — typically
 one tensor per layer boundary — and *recomputes* the rest during the backward pass from those saved
 points. It trades a second forward pass (extra compute) for a large cut in activation memory. In the
-common per-layer scheme, memory drops from proportional to the number of layers toward proportional to
-its square root, at the cost of roughly one extra forward. The knob is *which* activations to keep;
-selective schemes recompute only the cheap-to-recompute, memory-heavy ones.
+common per-layer scheme — one checkpoint per layer boundary — stored activation memory stays
+proportional to the layer count $L$ but with a large constant reduction, since only the boundary tensors
+and one layer's recompute workspace are live. The $\Theta(\sqrt{L})$ memory result (Chen et al.) comes
+from a different schedule: a checkpoint every $\sqrt{L}$ layers, recomputing one $\sqrt{L}$-layer segment
+at a time during the backward. Either way the price is roughly one extra forward. The knob is *which*
+activations to keep; selective schemes recompute only the cheap-to-recompute, memory-heavy ones.
 </Invariant>
 
 This is a direct application of the roofline's logic: if a workload is memory-bound and compute-idle,
@@ -64,10 +67,11 @@ state overflow — the only remaining move is to split the model across devices.
 ladder of the next chapter, and activation checkpointing composes with every rung of it.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-R1-tiny's fixture makes the proportions explicit: fixed model state $\approx 101$ MB, but the rough
-activation estimate at the training batch is $\approx 403$ MB — activations are the larger, batch-driven
-tenant, and the sum is what the 8 GB budget must hold. This is the memory wall in miniature: the pilot is
-sized so state + activations fit, and any growth hits memory first.
+R1-tiny's measured run makes the proportions explicit: the fixed model state is the run's 101.2 MB train
+state, while measured peak memory at the training batch (bs=8, fp32) is 1,171,365,888 B
+$\approx 1.17$ GB — roughly 1.07 GB of activations and workspace on top of the fixed state. Activations
+are the larger, batch-driven tenant, and the sum is what the 8 GB budget must hold. This is the memory
+wall in miniature: the pilot is sized so state + activations fit, and any growth hits memory first.
 </Renewable>
 
 **Where this goes.** When one device is not enough, the model is split across many. The next chapter is

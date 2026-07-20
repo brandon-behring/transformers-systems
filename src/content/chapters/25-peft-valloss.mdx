@@ -7,12 +7,13 @@ freshness: reference
 volatility: architectural-pattern
 tags: [alignment, peft, lora, evaluation, checkpointing]
 concept_ids: [lora, peft, surrogate-loss, checkpoint-selection]
-description: "LoRA makes fine-tuning cheap by training a thin low-rank overlay on a frozen backbone — and cheap iteration exposes a trap: validation loss keeps improving past the point where the metric you ship has peaked."
+description: "LoRA makes fine-tuning cheap by training a thin low-rank overlay on a frozen backbone — and cheap iteration exposes a trap: validation loss can decouple from the metric you ship, in either direction, so checkpoints must be selected on the metric itself."
 scenario_ids: [r1-tiny-train]
 measured_on: "Tier-0 RTX 2070 SUPER"
 sources:
   - { tier: "T1", url: "https://arxiv.org/abs/2106.09685", label: "Hu et al. — LoRA: Low-Rank Adaptation of Large Language Models (2021)" }
   - { tier: "T1", url: "https://arxiv.org/abs/2110.04366", label: "He et al. — Towards a Unified View of Parameter-Efficient Transfer Learning (2021)" }
+  - { tier: "T1", url: "https://arxiv.org/abs/2305.11206", label: "Zhou et al. — LIMA: Less Is More for Alignment (2023)" }
 ---
 import Invariant from '../../components/Invariant.astro';
 import Renewable from '../../components/Renewable.astro';
@@ -24,7 +25,7 @@ import SourceList from '../../components/SourceList.astro';
 **Where we are.** [SFT](/transformers-systems/chapters/24-sft/) adapts a model by updating its weights —
 expensive to store and slow to iterate. This chapter makes adaptation cheap with a low-rank overlay, and
 then delivers the lesson cheap iteration exposes: the loss you train is a *surrogate*, and selecting on it
-ships the wrong model.
+can ship the wrong model.
 
 ## 1. LoRA: train the overlay, freeze the backbone
 
@@ -40,14 +41,26 @@ The engineering payoff is iteration speed: a LoRA fine-tune trains a tiny fracti
 far more easily in memory (no optimizer state for the frozen weights), and produces a small artifact. This
 is what makes running *many* fine-tunes — and therefore the selection problem below — practical.
 
+The arithmetic is exact and checkable on R1-tiny. A rank-$8$ overlay on one $256\times256$ attention
+projection trains $2\cdot 8\cdot 256 = 4{,}096$ parameters against $65{,}536$ for the full matrix — a
+$16\times$ reduction. On the tied $8192\times256$ vocabulary matrix the same rank trains
+$8\cdot(8192+256) = 67{,}584$ against $2{,}097{,}152$ — a $31\times$ reduction, essentially at the
+$256/8 = 32$ ceiling the smaller dimension imposes on any rank-$8$ overlay. The wide matrix is where the
+most *absolute* trainable parameters are saved (about $2.03$ M fewer than full fine-tuning of it), but its
+reduction *ratio* is only about twice the square projection's — capped, not unbounded, by the narrow
+dimension.
+
 ## 2. The val-loss trap
 
 <Invariant note="the loss is a surrogate for the metric">
 The quantity you optimize (validation cross-entropy) is not the quantity you ship (task accuracy — for the
-document model, correct *structure*). These can move in opposite directions: validation loss keeps
-improving past the point where the shipped metric has already peaked, because lower per-token loss can
-reflect over-confidence and stylistic mimicry rather than more-correct answers. **Selecting the checkpoint
-with the lowest validation loss can therefore ship a strictly worse model than an earlier one.**
+document model, correct *structure*). The two decouple for concrete reasons: fine-tuning overfits to a
+narrow demonstration distribution, so held-out per-token loss stops tracking behavior outside it; and the
+loss is measured *teacher-forced* (every prediction conditioned on a ground-truth prefix) while the shipped
+model runs *free-running* on its own output. The decoupling is documented in both directions — LIMA reports
+validation perplexity *rising* while generation quality improves — so validation loss is not even a
+reliably-signed proxy. **Selecting the checkpoint with the lowest validation loss can therefore ship a
+worse model than one selected on the metric itself.**
 </Invariant>
 
 The fix is a discipline, not a hyperparameter: run the *real* metric inside the training loop and select
@@ -63,11 +76,10 @@ to compare across runs. The val-loss trap is thus the bridge to the eval-as-CI c
 selection is only as trustworthy as the automated metric behind it.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-The parameter arithmetic is exact and checkable: a rank-$8$ LoRA overlay on one of R1-tiny's
-$256\times256$ attention projections trains $2\cdot 8\cdot 256 = 4{,}096$ parameters versus $65{,}536$ for
-the full matrix — a $16\times$ reduction on that projection, and far larger on the wide vocabulary matrix.
-The val-loss-trap discipline (select on the metric) is specified as a checkpoint-selection policy; the
-metric it selects on is the subject of the eval-as-CI chapter.
+LoRA fine-tuning is **design-forward** on Tier-0 — the pilot's measured run is full-parameter pretraining,
+and no overlay has been trained. The val-loss-trap discipline (select on the metric) is likewise specified
+as a checkpoint-selection policy, not yet an exercised loop; the metric it would select on is the subject
+of the eval-as-CI chapter.
 </Renewable>
 
 **Where this goes.** SFT and PEFT teach *format* from demonstrations. But some behaviors are easier to
@@ -77,4 +89,5 @@ of the next chapter.
 <SourceList sources={[
   { tier: "T1", url: "https://arxiv.org/abs/2106.09685", label: "Hu et al., LoRA — the frozen-backbone low-rank overlay" },
   { tier: "T1", url: "https://arxiv.org/abs/2110.04366", label: "He et al. — a unified view of parameter-efficient fine-tuning" },
+  { tier: "T1", url: "https://arxiv.org/abs/2305.11206", label: "Zhou et al., LIMA — validation perplexity can rise while generation quality improves" },
 ]} />

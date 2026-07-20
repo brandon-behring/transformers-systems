@@ -9,7 +9,7 @@ tags: [roofline, arithmetic-intensity, foundations]
 concept_ids: [roofline, arithmetic-intensity, four-way-bound, ridge-point]
 description: "The one mental model the guide reuses: compute- vs memory- vs comms- vs overhead-bound, via arithmetic intensity."
 sources:
-  - { tier: "T1", url: "https://en.wikipedia.org/wiki/Roofline_model", label: "Williams, Waterman & Patterson — Roofline (CACM 2009)" }
+  - { tier: "T1", url: "https://www2.eecs.berkeley.edu/Pubs/TechRpts/2008/EECS-2008-134.pdf", label: "Williams, Waterman & Patterson — Roofline (UCB EECS-2008-134; CACM 2009)" }
   - { tier: "T2", url: "https://jax-ml.github.io/scaling-book/", label: "How to Scale Your Model (Google / JAX-ML)" }
   - { tier: "T3", url: "https://horace.io/brrr_intro.html", label: "Horace He — Making Deep Learning Go Brrr" }
 ---
@@ -37,10 +37,15 @@ The two are equal at the **arithmetic intensity** $I=\Phi/\beta=F/\mathcal B=I^\
 The invariant above never expires. The *numbers* that instantiate it do — so they carry provenance:
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-Our reference model **R1-tiny** (6,327,552 params) trains at ~**82,000 tok/s** at batch 8 on the
-RTX 2070 SUPER; its decode step has arithmetic intensity ≈ 1 (one weight read per token) and is
-firmly **memory-bound** — the reason inference optimization later targets bytes moved, not FLOPs.
+Our reference model **R1-tiny** (6,327,552 params) trains at ≈**81,000 tok/s** (81,029 tok/s — a
+single run, no spread) at batch 8 on the RTX 2070 SUPER.
 </Renewable>
+
+Decode we have not benchmarked yet; the roofline already predicts its regime. A decode step streams
+every weight once per generated token — two FLOPs per weight read — so its arithmetic intensity is
+≈ 1 at bf16 weights, and ≈ 0.5 under the pilot's fp32 weights: far below any modern ridge point,
+hence firmly **memory-bound**. That is the reason inference optimization later targets bytes moved,
+not FLOPs.
 
 Reproduce the measurement yourself — this listing is versioned because the toolchain moves:
 
@@ -52,7 +57,7 @@ python m1a_real.py   # trains R1-tiny on the R0 tokens; emits a validated benchm
 </Versioned>
 
 <SourceList sources={[
-  { tier: "T1", url: "https://en.wikipedia.org/wiki/Roofline_model", label: "Williams–Waterman–Patterson, Roofline (CACM 2009)" },
+  { tier: "T1", url: "https://www2.eecs.berkeley.edu/Pubs/TechRpts/2008/EECS-2008-134.pdf", label: "Williams–Waterman–Patterson, Roofline (UCB EECS-2008-134; CACM 2009)" },
   { tier: "T2", url: "https://jax-ml.github.io/scaling-book/", label: "How to Scale Your Model (Google/JAX-ML)" },
   { tier: "T3", url: "https://horace.io/brrr_intro.html", label: "Horace He — Making Deep Learning Go Brrr" },
 ]} />

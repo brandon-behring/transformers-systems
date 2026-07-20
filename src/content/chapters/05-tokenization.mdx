@@ -13,7 +13,7 @@ code_path: "r0/build_r0.py"
 measured_on: "Tier-0 RTX 2070 SUPER"
 sources:
   - { tier: "T1", url: "https://arxiv.org/abs/1508.07909", label: "Sennrich et al. — Neural Machine Translation of Rare Words with Subword Units (BPE, 2016)" }
-  - { tier: "T1", url: "https://arxiv.org/abs/2101.00027", label: "GPT-2 / byte-level BPE lineage (language models as unsupervised multitask learners)" }
+  - { tier: "T1", url: "https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf", label: "Radford et al. — Language Models are Unsupervised Multitask Learners (GPT-2, 2019)" }
   - { tier: "T2", url: "https://github.com/huggingface/tokenizers", label: "Hugging Face tokenizers — the BPE trainer used by R0" }
 ---
 import Invariant from '../../components/Invariant.astro';
@@ -57,22 +57,29 @@ would double that third. The budget is a direct dial between sequence length and
 
 <Invariant note="special tokens are a namespace decision">
 Special tokens are vocabulary entries the trainer will never split or merge away — control symbols
-with fixed ids. Reserving them at training time is a namespace decision: a token added *after*
-training shifts no existing id, but a token the model never saw carries no learned meaning. So the
-tokenizer reserves, up front, both the sequence-control tokens (end-of-text, pad) **and** the
-document-structure tokens the document-AI model will later need.
+with fixed ids. Reserving them at tokenizer-training time buys two things: **merge-avoidance** (each
+tag string encodes atomically as one id, and no learned merge can cross or absorb it) and a **fixed
+embedding size** (the table never has to grow when the document model arrives). What reservation
+does *not* buy is meaning: a control token the text model never sees during training carries no
+learned embedding either way — that is a training-data question, not a vocabulary question.
 </Invariant>
 
-R0 reserves ten: `<|endoftext|>` and `<|pad|>` for sequences, and
-`<page> </page> <region> <table> <tr> <td> <formula> <eos_doc>` for document structure. The text model
-R1 will only ever emit the first two — but because the document tokens share the *same* tokenizer and
-ids, the document model R3 needs no re-tokenization and no embedding surgery. One tokenizer, two
+R0 reserves ten, at ids 0–9: `<|endoftext|>` and `<|pad|>` for sequences, and
+`<page> </page> <region> <table> <tr> <td> <formula> <eos_doc>` for document structure. Note the
+asymmetry: only `</page>` gets a reserved closing tag, and the contract's `$…$` math-delimiter tokens
+are not reserved — other closers and the delimiters encode as ordinary byte-BPE text. Reserving up
+front is itself a pilot deviation: the frozen contract's production path *appends* the
+document-control vocabulary to R1's finished tokenizer with mean-initialized embeddings, per the
+pilot deviations register (ADR 0002). The text model R1 will only ever emit the first two — but
+because the document tokens share the *same* tokenizer and ids, the document model R3 needs no
+re-tokenization and no vocabulary resize. One tokenizer, two
 modalities; the seam is the subject of the [next chapter](/transformers-systems/chapters/06-document-interface/).
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-R0 trains a byte-level BPE tokenizer to **vocab 8,192** on the pinned corpus with the ten special
-tokens reserved, and records its `tokenizer_sha256` in the manifest. Re-running the build on the same
-corpus reproduces the same tokenizer hash — the tokenizer is deterministic given its inputs.
+R0 trains a byte-level BPE tokenizer to **vocab 8,192** on the checksummed corpus with the ten
+special tokens reserved at ids 0–9, and records its `tokenizer_sha256` in the manifest. Re-running
+the build on the same corpus bytes with the same `tokenizers` build reproduces the same hash —
+deterministic given its inputs, though the library version itself is unpinned (ADR 0002).
 </Renewable>
 
 <Versioned as_of="2026-07-17" version="torch==2.13.0">
@@ -94,6 +101,6 @@ same decoder can produce.
 
 <SourceList sources={[
   { tier: "T1", url: "https://arxiv.org/abs/1508.07909", label: "Sennrich et al., Neural Machine Translation of Rare Words with Subword Units — BPE" },
-  { tier: "T1", url: "https://arxiv.org/abs/2101.00027", label: "The byte-level BPE lineage (GPT-2-style total tokenizers over bytes)" },
+  { tier: "T1", url: "https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf", label: "Radford et al., Language Models are Unsupervised Multitask Learners — GPT-2's byte-level BPE over bytes" },
   { tier: "T2", url: "https://github.com/huggingface/tokenizers", label: "Hugging Face tokenizers — the ByteLevel BPE trainer R0 uses" },
 ]} />

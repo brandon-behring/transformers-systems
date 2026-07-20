@@ -7,7 +7,7 @@ freshness: reference
 volatility: architectural-pattern
 tags: [training, adamw, mixed-precision, checkpointing, r1]
 concept_ids: [adamw, mixed-precision-master, gradient-step, checkpoint-state]
-description: "The loop that turns R1 from a specification into a trained model: AdamW with a decoupled weight-decay, a mixed-precision policy that keeps an fp32 master, and a checkpoint that saves the full state — not just the weights."
+description: "The loop that turns R1 from a specification into a trained model: AdamW with a decoupled weight-decay, the fp32-master mixed-precision policy as the design target (the pilot trains in pure fp32), and a checkpoint that saves the full state — not just the weights."
 scenario_ids: [r1-tiny-train]
 code_path: "m1a_real.py"
 measured_on: "Tier-0 RTX 2070 SUPER"
@@ -22,9 +22,9 @@ import SourceList from '../../components/SourceList.astro';
 
 # The Training Loop: Optimizer, Mixed Precision, and Checkpoints
 
-**Where we are.** We have a correct forward pass and a correct attention kernel. This chapter wraps them
-in the loop that actually learns: compute a loss, backpropagate, take an optimizer step, and — crucially
-— save a checkpoint that captures enough to *resume*. Every choice here is one the [numbers
+**Where we are.** We have a correct forward pass and a parity-pinned attention kernel. This chapter wraps
+the model in the loop that actually learns: compute a loss, backpropagate, take an optimizer step, and —
+crucially — save a checkpoint that captures enough to *resume*. Every choice here is one the [numbers
 contract](/transformers-systems/chapters/03-numbers-contract/) and the [memory
 ledger](/transformers-systems/chapters/01-resource-accounting/) already priced.
 
@@ -35,12 +35,16 @@ AdamW maintains, per parameter, a first moment (a smoothed gradient) and a secon
 squared gradient), and steps in the direction of the first scaled by the inverse root of the second.
 Its defining choice is that weight decay is **decoupled** — applied directly to the weights rather than
 folded into the gradient — so regularization does not interact with the adaptive scaling. The two
-moments are the $8$ of the $16$ bytes-per-parameter the memory ledger charged to optimizer state.
+moments *are* the optimizer state: $8$ of the $16$ bytes-per-parameter in the memory ledger's fp32
+train state, with the weights ($4$) and gradients ($4$) accounting for the rest.
 </Invariant>
 
-R1-tiny uses the standard large-model settings: learning rate $3\times 10^{-4}$, $\beta=(0.9, 0.95)$
-(a slightly faster second-moment decay than the default), and weight decay $0.1$. These are not tuned
-here — they are the reference recipe, frozen so a later chapter's numbers do not silently depend on an
+R1-tiny uses the standard large-model settings: learning rate $3\times 10^{-4}$, $\beta=(0.9, 0.95)$,
+weight decay $0.1$, and gradient clipping at norm $1.0$. At $\beta_2=0.95$ the second moment averages
+over a materially shorter horizon than the $0.999$ default — roughly $20$ steps versus $1{,}000$. The
+contract's WSD learning-rate schedule is design-forward: the pilot runs at constant LR, and no scheduler
+exists in the lab (see the pilot deviations register, ADR 0002). These settings are not tuned here —
+they are the reference recipe, frozen so a later chapter's numbers do not silently depend on an
 untracked hyperparameter.
 
 ## 2. Mixed precision: compute low, accumulate high
@@ -50,12 +54,16 @@ Mixed-precision training computes the forward and backward in a low-precision fo
 memory, while keeping an **fp32 master copy** of the weights and doing the optimizer update and the
 gradient reductions in fp32. The reason is numerical: a bf16 weight cannot represent the tiny updates a
 late-training step applies, so accumulating those updates in fp32 preserves them. Compute low, accumulate
-high — the same byte-per-parameter split the training-state ledger charged.
+high.
 </Invariant>
 
-This policy is why the memory ledger's $16$ bytes/parameter includes both a bf16 weight and an fp32
-master: they coexist by design. bf16's wider exponent (versus fp16) also removes the loss-scaling
-machinery fp16 needs, simplifying the loop.
+This is the *design policy* — the recipe the frozen contract (§3) targets at the scale tier — not the
+pilot's measured configuration: the pilot run is pure fp32 AdamW, with no autocast and no master copy
+(see the pilot deviations register, ADR 0002). The ledgers differ accordingly: the pilot's fp32 ledger is
+$4{+}4{+}4{+}4 = 16$ B/param, while the contract recipe's honest ledger is a bf16 weight ($2$) + a bf16
+gradient ($2$) + an fp32 master ($4$) + two moments ($4{+}4$), for a total of $16$ B/param — or $18$
+with fp32 gradients — so the two totals collide at $16$ by coincidence. bf16's wider exponent (versus
+fp16) also removes the loss-scaling machinery fp16 needs, simplifying the loop.
 
 ## 3. A checkpoint is the whole state, not the weights
 
@@ -63,26 +71,29 @@ machinery fp16 needs, simplifying the loop.
 A checkpoint that stores only the model weights cannot resume training — it has thrown away the
 optimizer moments (so the first resumed step takes a wrong-sized stride) and the data cursor (so it
 re-sees or skips data). A *resumable* checkpoint captures the full training state: model weights,
-optimizer moments, the learning-rate schedule position, the dataloader cursor, and every random-number
-generator stream. The weights are the smallest part of what must be saved.
+optimizer moments, the dataloader cursor, and every random-number generator stream — plus, when a
+scheduler exists, its position (the pilot's loop is constant-LR and has none). The weights are a
+minority of the checkpoint's bytes: the two moments alone are twice their size.
 </Invariant>
 
 This is the setup for the next chapter's gate: the checkpoint is only correct if resuming from it
 reproduces an uninterrupted run, and that is only possible if the checkpoint is complete.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-R1-tiny trains with AdamW (lr $3\times10^{-4}$, $\beta=(0.9,0.95)$, wd $0.1$) in bf16 compute with fp32
-master weights and fp32 optimizer state, on real R0 tokens: loss descends $9.07 \to 6.26$ over the
-measured window, and the directly-measured optimizer state (101.2 MB) matches the ledger's prediction to
-the byte.
+R1-tiny trains with pure fp32 AdamW (lr $3\times10^{-4}$, $\beta=(0.9,0.95)$, wd $0.1$, grad-clip $1.0$;
+no autocast, no master copy) on real R0 tokens: loss falls from $9.07$ at the first warmup step to a
+trailing-10-step mean of $6.26$, and the directly-measured train state ($101.2$ MB —
+weights + grads + moments) matches the ledger's prediction to the byte. The contract's bf16-compute +
+fp32-master recipe is the scale-tier target, not what ran (see the pilot deviations register, ADR 0002).
 </Renewable>
 
 <Versioned as_of="2026-07-17" version="torch==2.13.0">
 ```python
 opt = torch.optim.AdamW(m.parameters(), lr=3e-4, betas=(0.9, 0.95), weight_decay=0.1)
-_, loss = m(x, y)                 # forward (bf16 compute)
-opt.zero_grad(); loss.backward()  # backward
-opt.step()                        # fp32 master update — the moments are 8 of the 16 B/param
+_, loss = m(x, y)                 # forward (pure fp32 — no autocast)
+opt.zero_grad(); loss.backward()  # backward (fp32 grads)
+torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)
+opt.step()                        # fp32 update — the moments are 8 of the 16 B/param train state
 ```
 </Versioned>
 

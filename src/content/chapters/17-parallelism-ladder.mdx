@@ -34,7 +34,8 @@ which problem is what turns "add more GPUs" into a plan.
 Each axis splits a different dimension:
 - **Data parallelism (DP)** replicates the model and splits the *batch*; it communicates gradients
   (an all-reduce) once per step. Sharded DP (ZeRO/FSDP) additionally splits the *model state* across the
-  replicas to cut memory, communicating parameters on demand.
+  replicas to cut memory — by stage: ZeRO-1 shards the optimizer state, ZeRO-2 adds the gradients, and
+  only ZeRO-3 (the FSDP regime) shards the parameters themselves and communicates them on demand.
 - **Tensor parallelism (TP)** splits individual *matrix multiplications* across devices; it communicates
   *within* each layer (an all-reduce per attention/MLP block), so it demands the fastest links.
 - **Pipeline parallelism (PP)** splits the *layer stack* into stages on different devices; it communicates
@@ -70,15 +71,17 @@ intra-node interconnect, DP's once-per-step all-reduce can tolerate the slower i
 mapping of communication frequency to network topology is the subject of the collectives chapter.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-Tier-0 is a single GPU, so the pilot exercises the *sharded-data-parallel* rung in a world-size-agnostic
-form (FSDP2 + Distributed Checkpoint, next chapter) with the model replicated across gloo ranks; genuine
-multi-device tensor/pipeline/expert parallelism and their collectives are a scale-tier extension the
-guide designs for but does not benchmark on 8 GB.
+Tier-0 is a single GPU, so what the pilot exercises is the checkpoint contract beneath this rung:
+multi-rank **gloo** process groups plus Distributed Checkpoint save/load with cross-world-size reshard
+of *replicated* plain-module state, verified by exact `torch.equal` (next chapter). FSDP2 itself
+(`fully_shard`) is designed-for but not integrated, per the pilot deviations register (ADR 0002); genuine
+multi-device tensor/pipeline/expert parallelism and their collectives are likewise a scale-tier extension
+the guide designs for but does not benchmark on 8 GB.
 </Renewable>
 
-**Where this goes.** The rung the pilot *can* prove is sharded data parallelism. The next chapter builds
-it with FSDP2 and pins the hardest correctness property it has: that a checkpoint saved under one device
-count restores under another.
+**Where this goes.** The rung nearest the pilot's reach is sharded data parallelism. The next chapter
+teaches it through FSDP2 and pins the hardest correctness property it has — that a checkpoint saved under
+one device count restores under another — the property the pilot does prove, on replicated state.
 
 <SourceList sources={[
   { tier: "T1", url: "https://arxiv.org/abs/1909.08053", label: "Shoeybi et al., Megatron-LM — tensor parallelism" },

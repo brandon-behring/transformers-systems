@@ -59,15 +59,18 @@ demonstrations — to teach the pretrained decoder the *format* of document outp
 ## 3. Where the reference model sits
 
 R1-tiny's pilot exercises the pretraining stage: it trains the next-token objective on R0 tokens and
-descends in loss. SFT is the *same loop* — same optimizer, same loss, same checkpoint format — run on
-instruction data instead of raw corpus, starting from the pretrained checkpoint. Because the loop is
-identical, everything Part 3 proved (mixed precision, deterministic resume) carries over unchanged.
+descends in loss. SFT is the *same loop* — same optimizer, same loss — run on instruction data instead of
+raw corpus, starting from a pretrained checkpoint. Because the loop is identical, what Part 3 actually
+proved — deterministic resume (Gate A) — carries over unchanged. Mixed precision does not: the pilot loop
+is pure fp32; bf16 compute with fp32 master weights is the scale-tier design, recorded in the pilot
+deviations register (ADR 0002).
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-The pilot has the pretraining stage measured — R1-tiny descends $9.07 \to 6.26$ on R0 tokens — which is the
-checkpoint an SFT stage would continue from. SFT itself is specified as the same training loop on curated
-demonstrations; it is design-forward on Tier-0 (the loop is proven, the demonstration set is the missing
-input), and reuses the Part-3 training and checkpoint machinery without modification.
+The pilot has the pretraining stage measured — R1-tiny descends $9.07 \to 6.26$ on R0 tokens — the run an
+SFT stage would continue from (the training script itself saves no checkpoint; save/resume lives in the
+Part-3 gate scripts). SFT itself is specified as the same training loop on curated demonstrations; it is
+design-forward on Tier-0 (the loop is proven, the demonstration set is the missing input), and would reuse
+the Part-3 gates' checkpoint machinery.
 </Renewable>
 
 **Where this goes.** Full fine-tuning updates every parameter, which is expensive to store and to iterate

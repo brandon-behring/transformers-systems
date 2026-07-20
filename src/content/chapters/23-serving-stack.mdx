@@ -33,10 +33,11 @@ back to the numbers contract — the served output must equal the reference.
 <Invariant note="iteration-level scheduling">
 A static batch — collect $N$ requests, run them to completion together — wastes the device: short requests
 finish and their slots idle until the longest finishes. **Continuous (iteration-level) batching** instead
-schedules *per step*: at every decode iteration the server admits newly arrived requests and evicts
+schedules *per step*: at every decode iteration the server admits newly arrived requests and retires
 finished ones, keeping the batch full. Because decode is memory-bound, adding sequences to a decode batch is
-nearly free in latency and raises arithmetic intensity toward compute-bound — so continuous batching is the
-single change that most improves decode throughput.
+nearly free in latency and raises arithmetic intensity toward compute-bound — which is why, across the
+serving literature's reported regimes, continuous batching is the change that most improves decode
+throughput.
 </Invariant>
 
 The scheduler is where prefill and decode are interleaved: it decides, each iteration, which requests are in
@@ -46,11 +47,13 @@ starving ongoing decode.
 ## 2. Admission is a memory-accounting problem
 
 <Invariant note="the scheduler is bounded by the block pool">
-A request can be admitted only if the paged cache has enough free blocks for its prompt plus expected
-generation; the scheduler is therefore a memory allocator wearing a queue. When the block pool is exhausted
-it must apply a policy — queue new requests, or preempt and evict a running sequence's blocks (recomputing or
-swapping them later). The paged cache from the previous chapter is what makes this bookkeeping tractable:
-admission reduces to "are there enough free blocks," a pool query, not a contiguity search.
+A request is admitted when the paged cache has enough free blocks for its *prompt* (plus a watermark of
+headroom); its generation then claims blocks on demand as decode proceeds — reserving prompt plus expected
+generation up front would reintroduce exactly the over-reservation paging exists to remove. The gamble that
+admitted sequences keep finding blocks is backed by a policy for pool exhaustion: queue new requests, and
+preempt a running sequence by evicting its blocks (recomputing or swapping them back later). The scheduler
+is therefore a memory allocator wearing a queue, and the paged cache is what makes the bookkeeping
+tractable: admission reduces to "are there enough free blocks," a pool query, not a contiguity search.
 </Invariant>
 
 This is why paging and scheduling are one system: the block pool is the currency the scheduler spends, and
@@ -69,10 +72,13 @@ trade correctness for speed is strongest.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
 The pilot's minimal server composes prefill, paged decode, and per-token generation for R1-tiny, and its
-acceptance gate is parity: the served greedy tokens are **bit-identical** to a full-recompute reference. It
-reports the prefill/decode timing split rather than a blended tokens/sec, so the compute-bound and
-memory-bound costs stay legible. Continuous batching and preemption are designed-for; the pilot pins the
-single-stream correctness they must preserve.
+acceptance gate — wrapped as `tests/test_paged_kv.py`, run on Tier-0, self-skipping loudly on the
+torch-less hosted CI lane (the pilot deviations register, ADR 0002, deviation 7) — is parity: the served
+greedy token IDs equal a full-recompute reference. It reports the prefill/decode timing split rather than a
+blended tokens/sec, so the two phases' costs stay legible. Continuous batching and preemption are
+designed-for; the as-built pool is deliberately minimal — one sequence, one hard-wired block table, no
+free-on-finish path — and what the pilot pins is the single-stream correctness those features must
+preserve.
 </Renewable>
 
 **Where this goes.** Part 5 completes the training-to-serving spine for the text model R1: it decides,

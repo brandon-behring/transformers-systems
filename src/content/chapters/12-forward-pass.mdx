@@ -25,7 +25,9 @@ import SourceList from '../../components/SourceList.astro';
 **Where we are.** Part 2 decided R1; Part 3 builds it. We start at the one operation the whole
 architecture is organized around — attention — and prove the small algebraic identity that the next
 chapter's kernel exploits. Getting this identity right is what lets a tiled, memory-efficient kernel be
-*bit-comparable* to a textbook implementation rather than merely close.
+*numerically comparable* to a textbook implementation within a stated tolerance — the identity is exact
+in real arithmetic; in floating point, reassociating the sums changes the low bits, so bitwise equality
+is the wrong standard for a kernel (it is the right one later, for resume).
 
 ## 1. Attention is a stable weighted average
 
@@ -65,14 +67,18 @@ be validated to floating-point tolerance rather than accepted as "close enough."
 
 R1's forward pass composes the pieces from Part 2's architecture chapter: RoPE-rotated queries and keys,
 grouped-query attention through this softmax, a SwiGLU feed-forward, pre-norm residuals, and a tied
-output projection. The reference implementation uses PyTorch's fused
-`scaled_dot_product_attention`, which itself computes attention by the online-softmax identity — so the
-model and the from-scratch kernel of the next chapter share one definition of the operation.
+output projection. The reference implementation uses PyTorch's
+`scaled_dot_product_attention` — a dispatcher whose fused backends compute attention by the
+online-softmax identity (its fallback math backend materializes the scores) — so the model and the
+from-scratch kernel of the next chapter share one definition of the operation.
 
 <Renewable last_measured="2026-07-17" measured_on="Tier-0 RTX 2070 SUPER" source="https://github.com/brandon-behring/transformers-systems-lab">
-R1-tiny's forward pass, run against the online-softmax kernel and against PyTorch's fused attention,
-agrees to floating-point tolerance ($\sim 10^{-7}$) — empirical confirmation that the tiled and full
-softmax compute the same value, as the identity promises.
+The parity gate runs the next chapter's Triton online-softmax kernel against PyTorch's
+`scaled_dot_product_attention` on standalone random tensors (three shapes, causal and non-causal) and
+accepts on `torch.allclose` with `atol=rtol=2e-2` — a deliberately loose fp32 envelope; the test prints
+the observed max error, but no artifact records it. R1-tiny's own forward pass runs exclusively through
+`F.scaled_dot_product_attention` (`model/r1.py`); it never runs through the Triton kernel. Within that
+gate, the tiled and full softmax compute the same value, as the identity promises.
 </Renewable>
 
 **Where this goes.** The identity is the license for a kernel that never stores the full score matrix.
